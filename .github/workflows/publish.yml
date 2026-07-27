@@ -1,0 +1,43 @@
+name: Publish to pub.dev
+
+# Publishing is driven by tags: pushing `vX.Y.Z` publishes the version in
+# pubspec.yaml. The tag pattern is deliberately strict so a mistyped tag
+# (for example `v0.5.6` instead of `v5.6.0`) simply does not match and
+# nothing is published.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required so pub.dev can authenticate this run through OIDC instead of
+      # a long-lived credential. Automated publishing must also be enabled for
+      # the package on pub.dev, pointing at this repository and tag pattern.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - run: flutter --version
+      - run: flutter pub get
+
+      # The tag push does not run main.yml (that workflow is branch-scoped),
+      # so re-run the same gates here rather than publishing unverified.
+      - run: flutter analyze
+      - run: flutter test
+
+      - name: Verify tag matches pubspec version
+        run: |
+          pubspec_version=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$pubspec_version" != "$tag_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pubspec version $pubspec_version" >&2
+            exit 1
+          fi
+
+      - run: flutter pub publish --force
