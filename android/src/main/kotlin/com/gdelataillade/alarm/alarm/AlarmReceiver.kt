@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Build
 import com.gdelataillade.alarm.services.AlarmStorage
 import com.gdelataillade.alarm.services.NotificationHandler
+import com.gdelataillade.alarm.services.SnoozeCoordinator
 
 import io.flutter.Log
 
@@ -15,6 +16,7 @@ class AlarmReceiver : BroadcastReceiver() {
         private const val TAG = "AlarmReceiver"
 
         const val ACTION_ALARM_STOP = "com.gdelataillade.alarm.ACTION_STOP"
+        const val ACTION_ALARM_SNOOZE = "com.gdelataillade.alarm.ACTION_SNOOZE"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -39,6 +41,19 @@ class AlarmReceiver : BroadcastReceiver() {
                     Log.d(TAG, "Alarm stopped notification for $id processed by Flutter: ${it.isSuccess}")
                 }
             }
+            return
+        }
+
+        // Defer the alarm from the notification's snooze action.
+        if (intent.action == ACTION_ALARM_SNOOZE) {
+            val id = intent.getIntExtra("id", 0)
+            Log.d(TAG, "Received snooze alarm command, id: $id")
+            // Handled through the coordinator rather than the service, which may
+            // have been killed while its notification lingered. Going through
+            // AlarmService.instance? here would make the snooze a silent no-op
+            // in exactly that case: notification left up, alarm never
+            // rescheduled, nothing reported.
+            SnoozeCoordinator.snooze(context, id)
             return
         }
 

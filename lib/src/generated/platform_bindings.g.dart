@@ -77,6 +77,7 @@ class AlarmSettingsWire {
     required this.iOSBackgroundAudio,
     required this.androidStopAlarmOnTermination,
     required this.preferConnectedAudioDevice,
+    this.androidSnoozeDurationMillis,
   });
 
   int id;
@@ -107,6 +108,14 @@ class AlarmSettingsWire {
 
   bool preferConnectedAudioDevice;
 
+  /// How long the snooze action defers the alarm, in milliseconds.
+  ///
+  /// Null, or anything below one minute, offers no snooze. The floor exists
+  /// because Android scheduling falls back to a plain `Handler.postDelayed`
+  /// below a few seconds, which survives neither process death nor
+  /// cancellation. Android only.
+  int? androidSnoozeDurationMillis;
+
   List<Object?> _toList() {
     return <Object?>[
       id,
@@ -123,6 +132,7 @@ class AlarmSettingsWire {
       iOSBackgroundAudio,
       androidStopAlarmOnTermination,
       preferConnectedAudioDevice,
+      androidSnoozeDurationMillis,
     ];
   }
 
@@ -147,6 +157,7 @@ class AlarmSettingsWire {
       iOSBackgroundAudio: result[11]! as bool,
       androidStopAlarmOnTermination: result[12]! as bool,
       preferConnectedAudioDevice: result[13]! as bool,
+      androidSnoozeDurationMillis: result[14] as int?,
     );
   }
 
@@ -285,6 +296,7 @@ class NotificationSettingsWire {
     this.iconColorGreen,
     this.iconColorBlue,
     required this.keepNotificationAfterAlarmEnds,
+    this.androidSnoozeButton,
   });
 
   String title;
@@ -305,6 +317,13 @@ class NotificationSettingsWire {
 
   bool keepNotificationAfterAlarmEnds;
 
+  /// Label for the snooze action. Null omits the action.
+  ///
+  /// Only shown when [AlarmSettingsWire.androidSnoozeDurationMillis] also
+  /// gives it a usable duration; a label alone describes nothing the platform
+  /// can perform. Android only.
+  String? androidSnoozeButton;
+
   List<Object?> _toList() {
     return <Object?>[
       title,
@@ -316,6 +335,7 @@ class NotificationSettingsWire {
       iconColorGreen,
       iconColorBlue,
       keepNotificationAfterAlarmEnds,
+      androidSnoozeButton,
     ];
   }
 
@@ -335,6 +355,7 @@ class NotificationSettingsWire {
       iconColorGreen: result[6] as double?,
       iconColorBlue: result[7] as double?,
       keepNotificationAfterAlarmEnds: result[8]! as bool,
+      androidSnoozeButton: result[9] as String?,
     );
   }
 
@@ -343,6 +364,53 @@ class NotificationSettingsWire {
   bool operator ==(Object other) {
     if (other is! NotificationSettingsWire ||
         other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+/// A snooze the host recorded and Dart has not yet applied.
+class PendingSnoozeWire {
+  PendingSnoozeWire({
+    required this.alarmId,
+    required this.millisecondsSinceEpoch,
+  });
+
+  int alarmId;
+
+  int millisecondsSinceEpoch;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      alarmId,
+      millisecondsSinceEpoch,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static PendingSnoozeWire decode(Object result) {
+    result as List<Object?>;
+    return PendingSnoozeWire(
+      alarmId: result[0]! as int,
+      millisecondsSinceEpoch: result[1]! as int,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! PendingSnoozeWire || other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
@@ -378,6 +446,9 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is NotificationSettingsWire) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
+    } else if (value is PendingSnoozeWire) {
+      buffer.putUint8(134);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -397,6 +468,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return VolumeFadeStepWire.decode(readValue(buffer)!);
       case 133:
         return NotificationSettingsWire.decode(readValue(buffer)!);
+      case 134:
+        return PendingSnoozeWire.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -576,6 +649,80 @@ class AlarmApi {
       return;
     }
   }
+
+  /// Lists snoozes the host has recorded but Dart has not yet applied.
+  ///
+  /// A snooze is normally taken with no engine running: the notification is
+  /// native and a full screen intent starts the process without starting
+  /// Flutter, so [AlarmTriggerApi.alarmSnoozed] reaches nobody. The host holds
+  /// a marker until Dart has durably applied it.
+  ///
+  /// Reading is **not** destructive — the marker survives until
+  /// [acknowledgeSnooze] confirms Dart wrote the new time. A read that is
+  /// followed by a crash therefore loses nothing.
+  Future<List<PendingSnoozeWire>> getPendingSnoozes() async {
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.alarm.AlarmApi.getPendingSnoozes$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as List<Object?>?)!
+          .cast<PendingSnoozeWire>();
+    }
+  }
+
+  /// Drops the marker for [alarmId], but only if it still records exactly
+  /// [nextRingAtMillis].
+  ///
+  /// Matching on the timestamp as well as the id means a late acknowledgement
+  /// for an earlier snooze cannot discard a newer one taken for the same
+  /// alarm in the meantime.
+  Future<void> acknowledgeSnooze(
+      {required int alarmId, required int nextRingAtMillis}) async {
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.alarm.AlarmApi.acknowledgeSnooze$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture =
+        pigeonVar_channel.send(<Object?>[alarmId, nextRingAtMillis]);
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
 }
 
 abstract class AlarmTriggerApi {
@@ -584,6 +731,14 @@ abstract class AlarmTriggerApi {
   Future<void> alarmRang(int alarmId);
 
   Future<void> alarmStopped(int alarmId);
+
+  /// An alarm was deferred on the host side and re-registered for
+  /// [millisecondsSinceEpoch].
+  ///
+  /// Distinct from [alarmStopped] because the alarm is still owed: reporting a
+  /// snooze as a stop would tell the application the user dismissed something
+  /// they asked to be reminded of again.
+  Future<void> alarmSnoozed(int alarmId, int millisecondsSinceEpoch);
 
   static void setUp(
     AlarmTriggerApi? api, {
@@ -640,6 +795,38 @@ abstract class AlarmTriggerApi {
               'Argument for dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmStopped was null, expected non-null int.');
           try {
             await api.alarmStopped(arg_alarmId!);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          } catch (e) {
+            return wrapResponse(
+                error: PlatformException(code: 'error', message: e.toString()));
+          }
+        });
+      }
+    }
+    {
+      final BasicMessageChannel<
+          Object?> pigeonVar_channel = BasicMessageChannel<
+              Object?>(
+          'dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed$messageChannelSuffix',
+          pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
+      if (api == null) {
+        pigeonVar_channel.setMessageHandler(null);
+      } else {
+        pigeonVar_channel.setMessageHandler((Object? message) async {
+          assert(message != null,
+              'Argument for dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed was null.');
+          final List<Object?> args = (message as List<Object?>?)!;
+          final int? arg_alarmId = (args[0] as int?);
+          assert(arg_alarmId != null,
+              'Argument for dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed was null, expected non-null int.');
+          final int? arg_millisecondsSinceEpoch = (args[1] as int?);
+          assert(arg_millisecondsSinceEpoch != null,
+              'Argument for dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed was null, expected non-null int.');
+          try {
+            await api.alarmSnoozed(arg_alarmId!, arg_millisecondsSinceEpoch!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

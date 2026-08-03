@@ -20,7 +20,8 @@ import com.gdelataillade.alarm.models.AlarmSettings
 import com.gdelataillade.alarm.models.NotificationSettings
 import com.gdelataillade.alarm.services.AlarmRingingLiveData
 import com.gdelataillade.alarm.services.NotificationHandler
-import com.gdelataillade.alarm.services.NotificationOnKillService
+import com.gdelataillade.alarm.services.WarningNotificationState
+import com.gdelataillade.alarm.services.SnoozeCoordinator
 import io.flutter.Log
 import kotlinx.serialization.json.Json
 
@@ -51,6 +52,15 @@ class AlarmService : Service() {
         const val EXTRA_ALARM_TITLE = "alarmTitle"
         const val EXTRA_ALARM_BODY = "alarmBody"
         const val EXTRA_ALARM_STOP_LABEL = "alarmStopLabel"
+
+        /**
+         * Snooze label, already localized, or null when this alarm cannot be
+         * snoozed.
+         *
+         * Gated on the same condition as the notification's snooze action, so
+         * an activity can offer snooze exactly when the notification would.
+         */
+        const val EXTRA_ALARM_SNOOZE_LABEL = "alarmSnoozeLabel"
 
         var instance: AlarmService? = null
 
@@ -150,7 +160,8 @@ class AlarmService : Service() {
             alarmSettings.notificationSettings,
             alarmSettings.androidFullScreenIntent,
             pendingIntent,
-            id
+            id,
+            alarmSettings.canSnooze
         )
 
         // Start the service in the foreground
@@ -239,9 +250,10 @@ class AlarmService : Service() {
         if (storage != null) {
             val storedAlarms = storage.getSavedAlarms()
             if (storedAlarms.isEmpty() || storedAlarms.all { it.id == id }) {
-                val serviceIntent = Intent(this, NotificationOnKillService::class.java)
-                // If the service isn't running this call will be ignored.
-                this.stopService(serviceIntent)
+                // An alarm that is currently ringing does not need a kill
+                // warning. If it is snoozed rather than stopped, rescheduling
+                // restores the warning via WarningNotificationState.refresh.
+                WarningNotificationState.disable(this)
                 Log.d(TAG, "Turning off the warning notification.")
             } else {
                 Log.d(TAG, "Keeping the warning notification on because there are other pending alarms.")
@@ -264,6 +276,11 @@ class AlarmService : Service() {
             putExtra(EXTRA_ALARM_TITLE, alarmSettings.notificationSettings.title)
             putExtra(EXTRA_ALARM_BODY, alarmSettings.notificationSettings.body)
             putExtra(EXTRA_ALARM_STOP_LABEL, alarmSettings.notificationSettings.stopButton)
+            putExtra(
+                EXTRA_ALARM_SNOOZE_LABEL,
+                alarmSettings.notificationSettings.androidSnoozeButton
+                    ?.takeIf { alarmSettings.canSnooze }
+            )
         } ?: applicationContext.packageManager
             .getLaunchIntentForPackage(applicationContext.packageName)
             ?: Intent()
@@ -366,6 +383,16 @@ class AlarmService : Service() {
     fun handleStopAlarmCommand(alarmId: Int) {
         if (alarmId == 0) return
         unsaveAlarm(alarmId)
+    }
+
+    /**
+     * Silences [alarmId] without unsaving it or telling Flutter it stopped.
+     *
+     * Only for [SnoozeCoordinator], and only once it has armed the replacement:
+     * the alarm is still owed, so none of the stop bookkeeping applies.
+     */
+    fun silenceForSnooze(alarmId: Int) {
+        stopAlarm(alarmId)
     }
 
     private fun unsaveAlarm(id: Int) {

@@ -26,6 +26,7 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
 
   StreamSubscription<AlarmSet>? ringSubscription;
   StreamSubscription<AlarmSet>? updateSubscription;
+  StreamSubscription<({int id, DateTime nextRingAt})>? snoozeSubscription;
 
   @override
   void initState() {
@@ -38,7 +39,25 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
     updateSubscription = Alarm.scheduled.listen((_) {
       unawaited(loadAlarms());
     });
+    // Android only. This receives snoozes taken while the app is running.
+    // A snooze taken with no engine is replayed during Alarm.init(), which
+    // happens before this widget exists -- see main() for that half. Either
+    // way the alarm list below refreshes, because Alarm.scheduled replays its
+    // latest value to new listeners.
+    snoozeSubscription = Alarm.snoozed.listen(snoozed);
     notifications = Notifications();
+  }
+
+  void snoozed(({int id, DateTime nextRingAt}) snooze) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Alarm ${snooze.id} snoozed until '
+          '${TimeOfDay.fromDateTime(snooze.nextRingAt).format(context)}',
+        ),
+      ),
+    );
   }
 
   Future<void> loadAlarms() async {
@@ -90,6 +109,7 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
   void dispose() {
     ringSubscription?.cancel();
     updateSubscription?.cancel();
+    snoozeSubscription?.cancel();
     super.dispose();
   }
 

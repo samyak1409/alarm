@@ -7,6 +7,8 @@ void main() {
     DateTime? dateTime,
     String? assetAudioPath = 'assets/alarm.mp3',
     String? payload,
+    Duration? snoozeDuration,
+    String? snoozeButton,
   }) {
     return AlarmSettings(
       id: id,
@@ -16,12 +18,14 @@ void main() {
         volume: 0.8,
         fadeDuration: const Duration(seconds: 5),
       ),
-      notificationSettings: const NotificationSettings(
+      notificationSettings: NotificationSettings(
         title: 'Title',
         body: 'Body',
         stopButton: 'Stop',
+        androidSnoozeButton: snoozeButton,
       ),
       payload: payload,
+      androidSnoozeDuration: snoozeDuration,
     );
   }
 
@@ -142,6 +146,25 @@ void main() {
       );
       expect(wire.notificationSettings.title, 'Title');
     });
+
+    test('sends the snooze duration in milliseconds', () {
+      final settings = buildSettings(
+        snoozeDuration: const Duration(minutes: 9),
+        snoozeButton: 'Snooze',
+      );
+
+      final wire = settings.toWire();
+
+      expect(wire.androidSnoozeDurationMillis, 9 * 60 * 1000);
+      expect(wire.notificationSettings.androidSnoozeButton, 'Snooze');
+    });
+
+    test('leaves the snooze fields null when no snooze is configured', () {
+      final wire = buildSettings().toWire();
+
+      expect(wire.androidSnoozeDurationMillis, isNull);
+      expect(wire.notificationSettings.androidSnoozeButton, isNull);
+    });
   });
 
   group('AlarmSettings copyWith', () {
@@ -162,6 +185,62 @@ void main() {
       expect(settings.copyWith().payload, 'original');
       expect(settings.copyWith(payload: () => 'new').payload, 'new');
       expect(settings.copyWith(payload: () => null).payload, isNull);
+    });
+
+    test('androidSnoozeDuration can be set and cleared through the callback',
+        () {
+      final settings = buildSettings(
+        snoozeDuration: const Duration(minutes: 9),
+        snoozeButton: 'Snooze',
+      );
+
+      expect(
+        settings.copyWith().androidSnoozeDuration,
+        const Duration(minutes: 9),
+      );
+      expect(
+        settings
+            .copyWith(
+              androidSnoozeDuration: () => const Duration(minutes: 5),
+            )
+            .androidSnoozeDuration,
+        const Duration(minutes: 5),
+      );
+      expect(
+        settings
+            .copyWith(androidSnoozeDuration: () => null)
+            .androidSnoozeDuration,
+        isNull,
+      );
+    });
+  });
+
+  group('AlarmSettings snooze JSON', () {
+    test('round trips the snooze duration and label', () {
+      final settings = buildSettings(
+        snoozeDuration: const Duration(minutes: 9),
+        snoozeButton: 'Snooze',
+      );
+
+      final restored = AlarmSettings.fromJson(settings.toJson());
+
+      expect(restored.androidSnoozeDuration, const Duration(minutes: 9));
+      expect(
+        restored.notificationSettings.androidSnoozeButton,
+        'Snooze',
+      );
+      expect(restored, equals(settings));
+    });
+
+    test('parses alarms stored before snooze existed', () {
+      final json = buildSettings().toJson()..remove('androidSnoozeDuration');
+      (json['notificationSettings']! as Map<String, dynamic>)
+          .remove('androidSnoozeButton');
+
+      final restored = AlarmSettings.fromJson(json);
+
+      expect(restored.androidSnoozeDuration, isNull);
+      expect(restored.notificationSettings.androidSnoozeButton, isNull);
     });
   });
 

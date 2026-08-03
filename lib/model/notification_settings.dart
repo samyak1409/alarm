@@ -16,6 +16,7 @@ class NotificationSettings extends Equatable {
     required this.title,
     required this.body,
     this.stopButton,
+    this.androidSnoozeButton,
     this.icon,
     this.iconColor,
     this.keepNotificationAfterAlarmEnds = false,
@@ -36,6 +37,15 @@ class NotificationSettings extends Equatable {
   /// Won't work on iOS if app was killed.
   /// If null, button will not be shown. Null by default.
   final String? stopButton;
+
+  /// The text to display on the snooze button of the notification.
+  ///
+  /// **Android only.** Shown only when `AlarmSettings.androidSnoozeDuration`
+  /// also gives it a duration; a label alone describes nothing the platform
+  /// can perform.
+  ///
+  /// If null, button will not be shown. Null by default.
+  final String? androidSnoozeButton;
 
   /// The icon to display on the notification.
   ///
@@ -93,6 +103,7 @@ class NotificationSettings extends Equatable {
         title: title,
         body: body,
         stopButton: stopButton,
+        androidSnoozeButton: androidSnoozeButton,
         icon: icon,
         iconColorAlpha: iconColor?.a,
         iconColorRed: iconColor?.r,
@@ -107,6 +118,7 @@ class NotificationSettings extends Equatable {
     String? title,
     String? body,
     String? stopButton,
+    String? Function()? androidSnoozeButton,
     String? icon,
     Color? iconColor,
     bool? keepNotificationAfterAlarmEnds,
@@ -115,6 +127,11 @@ class NotificationSettings extends Equatable {
       title: title ?? this.title,
       body: body ?? this.body,
       stopButton: stopButton ?? this.stopButton,
+      // Wrapped so a caller can remove the snooze action; the older nullable
+      // fields keep their existing signatures for compatibility.
+      androidSnoozeButton: androidSnoozeButton != null
+          ? androidSnoozeButton()
+          : this.androidSnoozeButton,
       icon: icon ?? this.icon,
       iconColor: iconColor ?? this.iconColor,
       keepNotificationAfterAlarmEnds:
@@ -127,6 +144,7 @@ class NotificationSettings extends Equatable {
         title,
         body,
         stopButton,
+        androidSnoozeButton,
         icon,
         iconColor,
         keepNotificationAfterAlarmEnds,

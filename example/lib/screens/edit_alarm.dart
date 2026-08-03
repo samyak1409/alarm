@@ -121,10 +121,14 @@ class _ExampleAlarmEditScreenState extends State<ExampleAlarmEditScreen> {
       assetAudioPath: assetAudio,
       volumeSettings: volumeSettings,
       allowAlarmOverlap: true,
+      // Android only. Needs the matching androidSnoozeButton label below to
+      // show up, and must be at least AlarmSettings.minSnoozeDuration.
+      androidSnoozeDuration: const Duration(minutes: 1),
       notificationSettings: NotificationSettings(
         title: 'Alarm example',
         body: 'Your alarm ($id) is ringing',
         stopButton: 'Stop the alarm',
+        androidSnoozeButton: 'Snooze',
         icon: 'notification_icon',
         keepNotificationAfterAlarmEnds: true,
       ),

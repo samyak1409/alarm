@@ -1,5 +1,7 @@
 ## 5.7.0
+* [Android] Added a snooze action to the alarm notification, via `AlarmSettings.androidSnoozeDuration` and `NotificationSettings.androidSnoozeButton`. Snoozing defers the alarm rather than stopping it, and is reported on the new `Alarm.snoozed` stream as well as through `Alarm.scheduled`. A snooze taken with no Flutter engine running is applied on the next `Alarm.init()`.
 * [Android] Alarms can now be presented on the app's own activity by declaring an intent filter for `com.gdelataillade.alarm.action.RING`, instead of always opening the launcher activity.
+* Fixed `build_runner` being unable to regenerate `lib/model/*.g.dart`, which also removes the only `dart format` violation in the package.
 
 ## 5.6.0
 * [Android] Added support for Android Gradle Plugin 9, while keeping AGP 8 compatibility.

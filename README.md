@@ -89,6 +89,7 @@ await Alarm.set(alarmSettings: alarmSettings)
 | androidStopAlarmOnTermination                       | `bool`                 | Whether to stop the alarm when an Android task is terminated. Enabled by default.                                                                                                                    |
 | preferConnectedAudioDevice                          | `bool`                 | If true, routes alarm audio to a connected earphone or Bluetooth device when present, falling back to the built-in speaker if not. Uses the media volume slider instead of the alarm slider. Has no effect on iOS. Disabled by default. |
 | payload                                             | `String?`              | Optional data sent with the alarm. Caller handles serialization and parsing.                                                                                                                         |
+| androidSnoozeDuration                               | `Duration?`            | How long the snooze action defers the alarm. Android only. With a `NotificationSettings.androidSnoozeButton` label, the notification offers a snooze that stops the ring and re-registers the alarm this far ahead. Minimum one minute. No snooze if null. |
 | [notificationSettings](#notificationsettings-model) | `NotificationSettings` | Settings for notification title, body, icon, icon color and action buttons (only stop at the moment).                                                                                                |
 | [volumeSettings](#volumesettings-model)             | `VolumeSettings`       | Settings for alarm volume and fade durations.                                                                                                                                                        |
 
@@ -107,6 +108,7 @@ The property `androidStopAlarmOnTermination` works only on Android as on iOS the
 | title                          | `String`  | Title of the alarm notification.                                                   |
 | body                           | `String`  | Body of the alarm notification.                                                    |
 | stopButton                     | `String?` | Text shown in the stop button of the alarm notification. Button not shown if null. |
+| androidSnoozeButton            | `String?` | Text shown in the snooze button of the alarm notification. Android only. Shown only when `AlarmSettings.androidSnoozeDuration` also gives it a usable duration. |
 | icon                           | `String?` | Icon to display on the notification. Only customizable on Android.                 |
 | iconColor                      | `Color?`  | Color of the notification icon. Only customizable on Android.                      |
 | keepNotificationAfterAlarmEnds | `bool`    | Keeps the notification visible after the alarm sound ends. iOS only.               |
@@ -288,21 +290,36 @@ without starting Flutter:
 
 | Extra | Value |
 | --- | --- |
-| `alarmId` | The alarm's id, to stop it |
+| `alarmId` | The alarm's id, to act on it |
 | `alarmTitle`, `alarmBody` | From `NotificationSettings` |
 | `alarmStopLabel` | `NotificationSettings.stopButton` |
+| `alarmSnoozeLabel` | `NotificationSettings.androidSnoozeButton`, or null when this alarm cannot be snoozed |
 
-Stop the alarm by broadcasting `com.gdelataillade.alarm.ACTION_STOP` to
-`AlarmReceiver`. The receiver declares no intent filter, so the broadcast has
-to name it explicitly:
+Resolve the alarm by broadcasting to `AlarmReceiver`. The receiver declares no
+intent filter, so the broadcast has to name it explicitly:
 
 ```kotlin
-val stop = Intent(context, AlarmReceiver::class.java).apply {
-    action = "com.gdelataillade.alarm.ACTION_STOP"
-    putExtra("id", alarmId)
-}
-context.sendBroadcast(stop)
+// Dismiss the alarm.
+context.sendBroadcast(
+    Intent(context, AlarmReceiver::class.java).apply {
+        action = "com.gdelataillade.alarm.ACTION_STOP"
+        putExtra("id", alarmId)
+    }
+)
+
+// Or defer it, if alarmSnoozeLabel was non-null.
+context.sendBroadcast(
+    Intent(context, AlarmReceiver::class.java).apply {
+        action = "com.gdelataillade.alarm.ACTION_SNOOZE"
+        putExtra("id", alarmId)
+    }
+)
 ```
+
+Only offer snooze when `alarmSnoozeLabel` is non-null — it is gated on exactly
+the same condition as the notification's own snooze action, so a null label
+means the alarm has no usable snooze duration and the broadcast would be
+ignored.
 
 Your activity also becomes what tapping the notification opens, not only what
 the full screen intent opens — once declared, it is the alarm surface for both.
@@ -313,6 +330,73 @@ Observe `AlarmRingingLiveData.instance` and finish when it turns false — it go
 false once no alarm is ringing at all.
 
 Declaring no such activity keeps the previous behaviour.
+
+#### Snooze
+
+Give an alarm an `androidSnoozeDuration` and its notification an
+`androidSnoozeButton` label, and the notification offers a snooze that stops
+the current ring and re-registers the alarm that far ahead:
+
+```Dart
+AlarmSettings(
+  // ...
+  androidSnoozeDuration: const Duration(minutes: 9),
+  notificationSettings: const NotificationSettings(
+    title: 'Wake up',
+    body: '',
+    stopButton: 'Stop',
+    androidSnoozeButton: 'Snooze',
+  ),
+);
+```
+
+Both are required. A label with no duration describes an action the platform
+cannot perform, and a duration with no label gives the user no way to invoke
+it; either on its own logs a warning and offers no snooze.
+
+The duration must be at least `AlarmSettings.minSnoozeDuration` (one minute).
+Below that, Android stops scheduling through `AlarmManager` and falls back to
+an in-process timer that survives neither app termination nor cancellation, so
+a shorter snooze could be neither guaranteed nor undone.
+
+A snooze is reported as `Alarm.snoozed`, never as a stop, because the alarm is
+still owed:
+
+```Dart
+Alarm.snoozed.listen((snooze) {
+  print('Alarm ${snooze.id} rings again at ${snooze.nextRingAt}');
+});
+```
+
+The alarm also leaves `Alarm.ringing` and reappears in `Alarm.scheduled` with
+its new `dateTime`, so an app that tracks alarm state through those streams
+needs no special handling.
+
+The button is normally pressed with **no Flutter engine running**, since the
+notification is native and the process may not be up. The deferral is recorded
+natively and applied on the next `Alarm.init()`, before any reconciliation, so
+your app never sees an alarm whose time moved with nothing explaining why. The
+record is kept until Dart confirms it stored the new time, so a crash in
+between loses nothing, and applying the same deferral twice does nothing the
+second time.
+
+> **Subscribe to `Alarm.snoozed` before calling `Alarm.init()`** if you want
+> those replayed deferrals. It is a plain broadcast stream with no buffering, so
+> a deferral replayed during `init()` is delivered only to listeners that
+> already exist. `Alarm.scheduled` has no such constraint — it replays its
+> latest value to new listeners — so an app that only needs the alarm's new time
+> can read it there instead.
+
+Snoozing an alarm that is not currently scheduled, or whose snooze time has
+already passed, is refused rather than applied — a deferral is never allowed to
+rewrite an alarm into the past, where the next reconciliation pass would delete
+it.
+
+One caveat, inherited from how overlapping alarms work generally: if a snoozed
+alarm comes back round while a different alarm is ringing and
+`allowAlarmOverlap` is false, it is discarded rather than queued. Set
+`allowAlarmOverlap` or `allowSameSecondScheduling` if your app can have several
+alarms due close together.
 
 ### iOS
 Keeps the app awake using a silent `AVAudioPlayer` until alarm rings. When in the background, it also uses `Background App Refresh` to periodically ensure the app is still active.

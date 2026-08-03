@@ -9,6 +9,7 @@ import 'package:alarm/src/alarm_trigger_api_impl.dart';
 import 'package:alarm/src/android_alarm.dart';
 import 'package:alarm/src/generated/platform_bindings.g.dart';
 import 'package:alarm/src/ios_alarm.dart';
+import 'package:alarm/src/platform_timers.dart';
 import 'package:alarm/utils/alarm_exception.dart';
 import 'package:alarm/utils/alarm_set.dart';
 import 'package:alarm/utils/extensions.dart';
@@ -34,11 +35,22 @@ class Alarm {
 
   static final _ringing = BehaviorSubject<AlarmSet>.seeded(AlarmSet.empty());
 
+  static final _snoozed =
+      StreamController<({int id, DateTime nextRingAt})>.broadcast();
+
   /// Stream of the scheduled alarms.
   static ValueStream<AlarmSet> get scheduled => _scheduled.stream;
 
   /// Stream of the ringing alarms.
   static ValueStream<AlarmSet> get ringing => _ringing.stream;
+
+  /// Stream of alarms deferred on the host side, with the instant each one
+  /// rings again.
+  ///
+  /// A snooze never reaches [ringing] as a stop: the alarm is still owed, and
+  /// an application tracking its own alarm state needs to record a deferral
+  /// rather than a dismissal.
+  static Stream<({int id, DateTime nextRingAt})> get snoozed => _snoozed.stream;
 
   /// Stream of the alarm updates.
   ///
@@ -62,6 +74,7 @@ class Alarm {
     AlarmTriggerApiImpl.ensureInitialized(
       alarmRang: alarmRang,
       alarmStopped: _alarmStopped,
+      alarmSnoozed: _alarmSnoozed,
     );
 
     await AlarmStorage.init();
@@ -71,12 +84,30 @@ class Alarm {
 
   /// Checks if some alarms were set on previous session.
   /// If it's the case then reschedules them.
-  static Future<void> checkAlarm() async {
+  ///
+  /// Single-flight: concurrent callers share one pass rather than interleaving
+  /// two reconciliations over the same alarms.
+  static Future<void> checkAlarm() =>
+      _checkAlarmFuture ??= _checkAlarm().whenComplete(() {
+        _checkAlarmFuture = null;
+      });
+
+  static Future<void>? _checkAlarmFuture;
+
+  static Future<void> _checkAlarm() async {
+    final snoozed = await _applyPendingSnoozes();
+
     final alarms = await getAlarms();
 
     if (iOS) await stopAll();
 
     for (final alarm in alarms) {
+      // Just reconciled from a snooze marker: the native alarm is already
+      // armed for the new time and both stores agree, so set() would only
+      // cancel and re-arm it — and stop() inside set() reports a spurious
+      // alarmStopped on the way through.
+      if (snoozed.contains(alarm.id)) continue;
+
       final now = DateTime.now();
       if (alarm.dateTime.isAfter(now)) {
         await set(alarmSettings: alarm);
@@ -91,6 +122,16 @@ class Alarm {
           _ringing.add(_ringing.value.add(alarm));
           ringStream.add(alarm);
         } else {
+          // Re-read before destroying anything. Every await above is a window
+          // in which a snooze can land, and the snapshot this loop iterates
+          // would still show the pre-snooze time — stopping here would cancel a
+          // deferral the user just asked for.
+          final current = await getAlarm(alarm.id);
+          if (current != null && current.dateTime.isAfter(DateTime.now())) {
+            _log.info('Alarm ${alarm.id} moved to ${current.dateTime} while '
+                'reconciling, so it is left scheduled.');
+            continue;
+          }
           await stop(alarm.id);
         }
       }
@@ -132,6 +173,20 @@ class Alarm {
     return success;
   }
 
+  /// Returns this class to the state a fresh isolate would see.
+  ///
+  /// Only for tests. [scheduled] and [ringing] are static subjects and
+  /// [checkAlarm] is single-flight, so without this one test's alarms and
+  /// in-flight reconciliation are still there for the next one. Reset
+  /// `AlarmStorage` and `AlarmTriggerApiImpl` alongside it.
+  @visibleForTesting
+  static void resetForTesting() {
+    _checkAlarmFuture = null;
+    _scheduled.add(AlarmSet.empty());
+    _ringing.add(AlarmSet.empty());
+    PlatformTimers.stopAll();
+  }
+
   /// Validates [alarmSettings] fields.
   static void alarmSettingsValidation(AlarmSettings alarmSettings) {
     if (alarmSettings.id == 0 || alarmSettings.id == -1) {
@@ -154,6 +209,44 @@ class Alarm {
         message:
             'Alarm id cannot be set smaller than Int min value (-2147483648). '
             'Provided: ${alarmSettings.id}',
+      );
+    }
+
+    final snoozeDuration = alarmSettings.androidSnoozeDuration;
+    if (snoozeDuration != null && snoozeDuration <= Duration.zero) {
+      throw AlarmException(
+        AlarmErrorCode.invalidArguments,
+        message: 'androidSnoozeDuration must be positive. '
+            'Provided: $snoozeDuration',
+      );
+    }
+
+    // Everything below only warns. These settings are inert on iOS, and
+    // NotificationSettings is shared across platforms, so throwing would break
+    // apps that configure a snooze label once for both.
+    final snoozeLabel = alarmSettings.notificationSettings.androidSnoozeButton;
+    final snoozeIsUsable = snoozeDuration != null &&
+        snoozeDuration >= AlarmSettings.minSnoozeDuration;
+
+    if (snoozeDuration != null && !snoozeIsUsable) {
+      _log.warning(
+        'Alarm ${alarmSettings.id} has androidSnoozeDuration $snoozeDuration, '
+        'which is below the ${AlarmSettings.minSnoozeDuration} minimum, so no '
+        'snooze will be offered.',
+      );
+    }
+    if (snoozeLabel != null && !snoozeIsUsable) {
+      _log.warning(
+        'Alarm ${alarmSettings.id} sets a snooze button labelled '
+        '"$snoozeLabel" but no usable androidSnoozeDuration, so the button '
+        'will not be shown.',
+      );
+    }
+    if (snoozeIsUsable && snoozeLabel == null) {
+      _log.warning(
+        'Alarm ${alarmSettings.id} has an androidSnoozeDuration but no '
+        'NotificationSettings.androidSnoozeButton label, so the notification '
+        'will not offer a snooze.',
       );
     }
   }
@@ -266,6 +359,109 @@ class Alarm {
     _scheduled.add(_scheduled.value.remove(alarm));
     _ringing.add(_ringing.value.add(alarm));
     ringStream.add(alarm);
+  }
+
+  /// Applies snoozes the host recorded while no isolate was listening.
+  ///
+  /// The notification is native and a full screen intent starts the process
+  /// without starting Flutter, so a deferral taken there is normally observed
+  /// only here. Runs before [checkAlarm]'s reschedule loop: until the shifted
+  /// time is in Dart storage, that loop sees the original past time and stops
+  /// the alarm, undoing the snooze.
+  ///
+  /// Ids that were applied here are returned so the caller can leave them
+  /// alone — the native alarm and native storage are already correct, so
+  /// rescheduling them would cancel and re-arm for no reason.
+  static Future<Set<int>> _applyPendingSnoozes() async {
+    final List<PendingSnoozeWire> pending;
+    try {
+      pending = await AlarmApi().getPendingSnoozes();
+    } on Object catch (error) {
+      // Never let this break init: fall through to the normal reschedule loop.
+      _log.warning('Could not read pending snoozes: $error');
+      return {};
+    }
+
+    final applied = <int>{};
+    for (final snooze in pending) {
+      final nextRingAt =
+          DateTime.fromMillisecondsSinceEpoch(snooze.millisecondsSinceEpoch);
+      try {
+        if (await _applySnooze(snooze.alarmId, nextRingAt)) {
+          applied.add(snooze.alarmId);
+        }
+        // Acknowledged either way: an applied snooze is durable, and one that
+        // could not be applied is not going to become applicable later.
+        await AlarmApi().acknowledgeSnooze(
+          alarmId: snooze.alarmId,
+          nextRingAtMillis: snooze.millisecondsSinceEpoch,
+        );
+      } on Object catch (error) {
+        _log.warning('Could not apply snooze ${snooze.alarmId}: $error');
+      }
+    }
+    return applied;
+  }
+
+  /// PRIVATE: Called by the native platform when an alarm was deferred there.
+  static Future<void> _alarmSnoozed(int alarmId, DateTime nextRingAt) async {
+    await _applySnooze(alarmId, nextRingAt);
+  }
+
+  /// Moves [alarmId] to [nextRingAt] in Dart's own state, and reports it.
+  ///
+  /// Shared by the live callback and startup reconciliation so both produce
+  /// the same result. Idempotent: applying a snooze already applied changes
+  /// nothing and emits nothing.
+  ///
+  /// Returns whether the alarm now rings at [nextRingAt].
+  static Future<bool> _applySnooze(int alarmId, DateTime nextRingAt) async {
+    final alarm = await getAlarm(alarmId);
+    if (alarm == null) {
+      _log.severe('Alarm $alarmId was snoozed but is not in storage, so the '
+          'deferral cannot be applied. The alarm will not ring again.');
+      return false;
+    }
+
+    // A marker whose time has already passed would rewrite the alarm to a past
+    // time, which checkAlarm then deletes. Refuse rather than destroy it.
+    if (!nextRingAt.isAfter(DateTime.now())) {
+      _log.warning('Ignoring snooze for $alarmId: $nextRingAt is not in the '
+          'future.');
+      return false;
+    }
+
+    // Whether this deferral is news. A marker replayed after the stored time
+    // already moved has nothing to write — but that is not the same as having
+    // nothing to do, because process-local state does not survive a restart.
+    final isNewDeferral = alarm.dateTime.isBefore(nextRingAt);
+    final snoozedAlarm =
+        isNewDeferral ? alarm.copyWith(dateTime: nextRingAt) : alarm;
+
+    if (isNewDeferral) await AlarmStorage.saveAlarm(snoozedAlarm);
+
+    // Reconciled every time, including for an already-applied marker. A fresh
+    // isolate starts with empty sets and no timers whatever storage says, and
+    // [checkAlarm] skips the ids applied here, so this is the only thing that
+    // surfaces them. The fallback timer also still holds the pre-snooze time,
+    // and left alone it fires immediately on the next foreground and reports a
+    // phantom ring, which would evict the snoozed alarm from [scheduled].
+    PlatformTimers.stopAlarm(alarmId);
+    PlatformTimers.setAlarm(snoozedAlarm);
+
+    final nextRinging = _ringing.value.removeById(alarmId);
+    if (nextRinging != _ringing.value) _ringing.add(nextRinging);
+
+    final nextScheduled =
+        _scheduled.value.removeById(alarmId).add(snoozedAlarm);
+    if (nextScheduled != _scheduled.value) _scheduled.add(nextScheduled);
+
+    // Only a deferral that actually moved the alarm is an event.
+    if (isNewDeferral) {
+      _snoozed.add((id: alarmId, nextRingAt: nextRingAt));
+      updateStream.add(alarmId);
+    }
+    return true;
   }
 
   static Future<void> _alarmStopped(int alarmId) async {

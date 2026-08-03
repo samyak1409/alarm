@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:alarm/model/alarm_settings.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -115,5 +116,17 @@ class AlarmStorage {
   static void dispose() {
     _fgbgSubscription?.cancel();
     _fgbgSubscription = null;
+  }
+
+  /// Forgets the initialized preferences so the next [init] runs again.
+  ///
+  /// Only for tests: `SharedPreferences.setMockInitialValues` swaps the
+  /// platform store, but this class holds a `SharedPreferences` instance with
+  /// its own populated cache, so without this a mocked store from one test is
+  /// invisible and the previous test's alarms leak into the next.
+  @visibleForTesting
+  static void resetForTesting() {
+    dispose();
+    _initFuture = null;
   }
 }

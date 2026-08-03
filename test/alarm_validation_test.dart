@@ -4,14 +4,20 @@ import 'package:alarm/utils/alarm_exception.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  AlarmSettings buildSettings(int id) {
+  AlarmSettings buildSettings(
+    int id, {
+    Duration? snoozeDuration,
+    String? snoozeButton,
+  }) {
     return AlarmSettings(
       id: id,
       dateTime: DateTime(2030),
       volumeSettings: const VolumeSettings.fixed(),
-      notificationSettings: const NotificationSettings(
+      androidSnoozeDuration: snoozeDuration,
+      notificationSettings: NotificationSettings(
         title: 'Title',
         body: 'Body',
+        androidSnoozeButton: snoozeButton,
       ),
     );
   }
@@ -53,6 +59,64 @@ void main() {
       expect(
         () => Alarm.alarmSettingsValidation(buildSettings(-2147483649)),
         throwsA(isA<AlarmException>()),
+      );
+    });
+
+    test('rejects a non-positive snooze duration', () {
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42, snoozeDuration: Duration.zero),
+        ),
+        throwsA(isA<AlarmException>()),
+      );
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42, snoozeDuration: const Duration(seconds: -1)),
+        ),
+        throwsA(isA<AlarmException>()),
+      );
+    });
+
+    test('accepts a snooze duration at the minimum', () {
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(
+            42,
+            snoozeDuration: AlarmSettings.minSnoozeDuration,
+            snoozeButton: 'Snooze',
+          ),
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('only warns for a snooze below the minimum', () {
+      // Inert on iOS and gated natively, so a too-short duration degrades to
+      // no snooze rather than failing the whole alarm.
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(
+            42,
+            snoozeDuration: const Duration(seconds: 5),
+            snoozeButton: 'Snooze',
+          ),
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('only warns when the label and duration do not agree', () {
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42, snoozeButton: 'Snooze'),
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42, snoozeDuration: const Duration(minutes: 9)),
+        ),
+        returnsNormally,
       );
     });
   });

@@ -52,7 +52,8 @@ class NotificationHandler(private val context: Context) {
         notificationSettings: NotificationSettings,
         fullScreen: Boolean,
         pendingIntent: PendingIntent,
-        alarmId: Int
+        alarmId: Int,
+        canSnooze: Boolean = false
     ): Notification {
         val defaultIconResId =
             context.packageManager.getApplicationInfo(context.packageName, 0).icon
@@ -102,6 +103,22 @@ class NotificationHandler(private val context: Context) {
         notificationSettings.let {
             if (it.stopButton != null) {
                 notificationBuilder.addAction(0, it.stopButton, stopPendingIntent)
+            }
+
+            // A label without a duration describes an action the platform
+            // cannot perform, so both are required before it is offered.
+            if (it.androidSnoozeButton != null && canSnooze) {
+                val snoozeIntent = Intent(context, AlarmReceiver::class.java).apply {
+                    action = AlarmReceiver.ACTION_ALARM_SNOOZE
+                    putExtra("id", alarmId)
+                }
+                val snoozePendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    alarmId,
+                    snoozeIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                notificationBuilder.addAction(0, it.androidSnoozeButton, snoozePendingIntent)
             }
 
             if (it.iconColor != null) {

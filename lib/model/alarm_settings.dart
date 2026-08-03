@@ -27,6 +27,7 @@ class AlarmSettings extends Equatable {
     this.androidStopAlarmOnTermination = true,
     this.preferConnectedAudioDevice = false,
     this.payload,
+    this.androidSnoozeDuration,
   });
 
   /// Constructs an `AlarmSettings` instance from the given JSON data.
@@ -91,6 +92,14 @@ class AlarmSettings extends Equatable {
   }
 
   static final _log = Logger('AlarmSettings');
+
+  /// Shortest [androidSnoozeDuration] the platform will honour.
+  ///
+  /// Below this, Android scheduling stops using `AlarmManager` and falls back
+  /// to an in-process timer that survives neither process death nor
+  /// cancellation — so a shorter snooze could be neither guaranteed nor undone.
+  /// A shorter duration offers no snooze at all rather than an unreliable one.
+  static const minSnoozeDuration = Duration(minutes: 1);
 
   /// Unique identifier associated with the alarm. Cannot be 0 or -1.
   final int id;
@@ -211,6 +220,18 @@ class AlarmSettings extends Equatable {
   /// Caller is responsible for serializing and parsing the payload.
   final String? payload;
 
+  /// How long the snooze action defers this alarm.
+  ///
+  /// **Android only.** When set, and when
+  /// [NotificationSettings.androidSnoozeButton] gives it a label, the alarm
+  /// notification offers a snooze that stops the current ring and re-registers
+  /// the alarm this far ahead.
+  ///
+  /// Null, or anything under a minute, offers no snooze. The minimum exists
+  /// because Android scheduling stops using `AlarmManager` for very short
+  /// delays, and the fallback survives neither process death nor cancellation.
+  final Duration? androidSnoozeDuration;
+
   /// Converts the `AlarmSettings` instance to a JSON object.
   Map<String, dynamic> toJson() => _$AlarmSettingsToJson(this);
 
@@ -230,6 +251,7 @@ class AlarmSettings extends Equatable {
         iOSBackgroundAudio: iOSBackgroundAudio,
         androidStopAlarmOnTermination: androidStopAlarmOnTermination,
         preferConnectedAudioDevice: preferConnectedAudioDevice,
+        androidSnoozeDurationMillis: androidSnoozeDuration?.inMilliseconds,
       );
 
   /// Creates a copy of `AlarmSettings` but with the given fields replaced with
@@ -264,6 +286,7 @@ class AlarmSettings extends Equatable {
     bool? androidStopAlarmOnTermination,
     bool? preferConnectedAudioDevice,
     String? Function()? payload,
+    Duration? Function()? androidSnoozeDuration,
   }) {
     return AlarmSettings(
       id: id ?? this.id,
@@ -288,6 +311,11 @@ class AlarmSettings extends Equatable {
       // The function wrapper allows callers to clear the payload by
       // explicitly returning null.
       payload: payload != null ? payload() : this.payload,
+      // Wrapped like payload so a caller can remove an existing snooze by
+      // returning null, which a plain nullable parameter cannot express.
+      androidSnoozeDuration: androidSnoozeDuration != null
+          ? androidSnoozeDuration()
+          : this.androidSnoozeDuration,
     );
   }
 
@@ -308,5 +336,6 @@ class AlarmSettings extends Equatable {
         androidStopAlarmOnTermination,
         preferConnectedAudioDevice,
         payload,
+        androidSnoozeDuration,
       ];
 }
