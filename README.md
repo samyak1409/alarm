@@ -332,7 +332,11 @@ finished, `Alarm.stop()` was called from Dart, or a queued alarm was promoted.
 Observe `AlarmRingingLiveData.instance` and finish when it turns false — it goes
 false once no alarm is ringing at all.
 
-Declaring no such activity keeps the previous behaviour.
+Declaring no such activity keeps the previous behaviour. The activity does not
+have to be a dedicated one either — declaring the `RING` filter on your existing
+`MainActivity` lets you tell an alarm launch from the user opening the app, with
+your normal UI still presenting the alarm. See
+[Telling an alarm launch from a manual one](https://github.com/gdelataillade/alarm/blob/main/help/DETECT-ALARM-LAUNCH-ANDROID.md).
 
 #### Snooze
 
