@@ -111,15 +111,24 @@ object AlarmScheduler {
             )
 
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
-                ?: throw IllegalStateException("AlarmManager not available")
+            if (alarmManager == null) {
+                Log.e(TAG, "Cannot arm alarm $id: AlarmManager is not available.")
+                return false
+            }
 
             setExactAlarm(alarmManager, triggerTimeMillis, pendingIntent)
             true
-        } catch (e: ClassCastException) {
-            Log.e(TAG, "AlarmManager service type casting failed", e)
-            false
         } catch (e: IllegalStateException) {
-            Log.e(TAG, "AlarmManager service not available", e)
+            // Reporting this as "service not available" was misleading: a missing
+            // service is handled above, and what reaches here is AlarmManager
+            // refusing the alarm — documented for an app that already holds the
+            // maximum number of scheduled alarms (500).
+            Log.e(
+                TAG,
+                "AlarmManager refused to arm alarm $id. The likely cause is this " +
+                    "app having reached the per-app limit on scheduled alarms.",
+                e
+            )
             false
         } catch (e: Exception) {
             Log.e(TAG, "Error while arming alarm $id", e)

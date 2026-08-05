@@ -33,8 +33,22 @@ class BootReceiver : BroadcastReceiver() {
 
                 // Call the setAlarm method in AlarmPlugin with the custom context
                 val alarmApi = AlarmApiImpl(context)
-                alarmApi.setAlarm(alarm)
-                Log.d(TAG, "Alarm rescheduled successfully for ID: ${alarm.id}")
+                if (alarmApi.setAlarm(alarm)) {
+                    Log.d(TAG, "Alarm rescheduled successfully for ID: ${alarm.id}")
+                } else {
+                    // Deliberately left in storage, unlike the Pigeon set path which
+                    // unsaves so Dart never reports an alarm the platform never armed.
+                    // Here that record is the only thing a later attempt could re-arm
+                    // from, and there is no engine running to be told about the
+                    // failure — dropping it would silently lose the user's alarm for
+                    // good. A boot-time failure is often transient anyway, because the
+                    // system is still coming up.
+                    Log.e(
+                        TAG,
+                        "Failed to re-arm alarm ${alarm.id} after reboot. It stays stored " +
+                            "so a later Alarm.init() or reboot can retry."
+                    )
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Exception while rescheduling alarm: $alarm", e)
             }
