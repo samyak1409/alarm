@@ -94,6 +94,37 @@ class Alarm {
 
   static Future<void>? _checkAlarmFuture;
 
+  /// How long past its due time an alarm the platform does not report as
+  /// ringing is still left alone by [checkAlarm].
+  ///
+  /// An alarm due at 06:00:00.000 is not audible at 06:00:00.000. On Android
+  /// the broadcast has to be delivered, the process may have to start, the
+  /// foreground service has to come up and the player has to prepare, and the
+  /// alarm only counts as ringing at the end of all that — so a reconciliation
+  /// landing in that gap cannot tell "already fired and was stopped" from
+  /// "about to sound". Cancelling the second is by far the worse mistake: the
+  /// alarm never rings, and every signal the app has says it was set.
+  ///
+  /// Generous on purpose, because the two outcomes are not comparable. Sparing
+  /// an alarm that really did fail costs a stale entry in storage; stopping one
+  /// that was about to ring costs the user their morning.
+  ///
+  /// A spared alarm is not tidied up on a timer. [checkAlarm] runs only when it
+  /// is called — in practice from [init] — so an alarm that genuinely failed
+  /// can sit in storage until the next pass. That is an accepted risk rather
+  /// than a harmless one: the entry may be an inexact alarm still pending and
+  /// about to ring late, which is exactly what this window protects, and a
+  /// native record that survives a reboot is re-armed by `BootReceiver`.
+  /// Scheduling a follow-up reconciliation was considered and rejected — a
+  /// timer would not fire in a background isolate that gets torn down, and it
+  /// could stop an alarm at the moment the user is acting on it.
+  ///
+  /// Does not cover an alarm delayed past this window by the inexact fallback
+  /// `AlarmScheduler` uses when the exact alarm permission is revoked. Telling
+  /// "armed and still pending" from "never armed" needs durable native state,
+  /// which the platform does not expose today.
+  static const _ringStartGrace = Duration(seconds: 30);
+
   static Future<void> _checkAlarm() async {
     final snoozed = await _applyPendingSnoozes();
 
@@ -132,6 +163,22 @@ class Alarm {
                 'reconciling, so it is left scheduled.');
             continue;
           }
+
+          // Read from [current] like the branch above, so both agree on the
+          // authoritative time. Android only: iOS arrives here having already
+          // been through [stopAll], which leaves [current] null and nothing to
+          // spare, so the gate is really documenting whose delivery chain this
+          // is about.
+          if (android && current != null) {
+            final overdue = DateTime.now().difference(current.dateTime);
+            if (overdue < _ringStartGrace) {
+              _log.info('Alarm ${alarm.id} came due '
+                  '${overdue.inMilliseconds}ms ago and is not audible yet, so '
+                  'it is left alone rather than stopped.');
+              continue;
+            }
+          }
+
           await stop(alarm.id);
         }
       }

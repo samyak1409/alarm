@@ -1,7 +1,9 @@
 package com.gdelataillade.alarm.api
 
 import com.gdelataillade.alarm.generated.AlarmApi
+import com.gdelataillade.alarm.generated.AlarmErrorCode
 import com.gdelataillade.alarm.generated.AlarmSettingsWire
+import com.gdelataillade.alarm.generated.FlutterError
 import com.gdelataillade.alarm.generated.PendingSnoozeWire
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -25,8 +27,47 @@ class AlarmApiImpl(private val context: Context) : AlarmApi {
     private val alarmIds: MutableList<Int> = mutableListOf()
 
     override fun setAlarm(alarmSettings: AlarmSettingsWire, callback: (Result<Unit>) -> Unit) {
-        setAlarm(AlarmSettings.fromWire(alarmSettings))
-        callback(Result.success(Unit))
+        val alarm = AlarmSettings.fromWire(alarmSettings)
+        if (setAlarm(alarm)) {
+            callback(Result.success(Unit))
+            return
+        }
+
+        // AlarmScheduler saves before it arms, so a failure leaves a stored alarm the
+        // platform never armed. Reporting that as success is what made the failure
+        // unobservable: Alarm.set() returned true, getAlarms() kept listing the alarm,
+        // and nothing rang.
+        //
+        // Dart's own failure path stops the alarm moments after this reply, which is
+        // what really cleans up, but the process can die in between — and a phantom
+        // that survives in storage is re-armed by BootReceiver after the next reboot,
+        // ringing an alarm the app believes does not exist. So undo the halves that
+        // landed here too.
+        //
+        // Each step is isolated on purpose. This is the failure path, so one cleanup
+        // throwing must not take the others down with it, and the reply has to be
+        // reached whatever happens or Dart waits on a channel error instead of the
+        // real cause.
+        alarmIds.remove(alarm.id)
+        runCatching { cancelPendingBroadcast(alarm.id) }
+            .onFailure { Log.e(TAG, "Failed to cancel the pending broadcast for ${alarm.id}", it) }
+        runCatching { AlarmStorage(context).unsaveAlarm(alarm.id) }
+            .onFailure { Log.e(TAG, "Failed to unsave ${alarm.id} after a failed arm", it) }
+        runCatching { WarningNotificationState.refresh(context) }
+            .onFailure { Log.e(TAG, "Failed to refresh the kill-warning state", it) }
+
+        callback(
+            Result.failure(
+                FlutterError(
+                    // The raw int, not the name: Dart maps the code back with
+                    // int.tryParse, so a name would arrive as AlarmErrorCode.unknown.
+                    AlarmErrorCode.PLUGIN_INTERNAL.raw.toString(),
+                    "Alarm ${alarm.id} could not be armed. " +
+                        "See the AlarmScheduler logs for the cause.",
+                    null
+                )
+            )
+        )
     }
 
     override fun stopAlarm(alarmId: Long, callback: (Result<Unit>) -> Unit) {
@@ -38,18 +79,8 @@ class AlarmApiImpl(private val context: Context) : AlarmApi {
         val serviceIsRunning = AlarmService.instance != null
         AlarmService.instance?.handleStopAlarmCommand(id)
 
-        // Intent to cancel the future alarm if it's set
-        val alarmIntent = Intent(context, AlarmReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            id,
-            alarmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Cancel the future alarm using AlarmManager
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.cancel(pendingIntent)
+        // Cancel the future alarm if it's set
+        cancelPendingBroadcast(id)
 
         alarmIds.remove(id)
         AlarmStorage(context).unsaveAlarm(id)
@@ -127,7 +158,17 @@ class AlarmApiImpl(private val context: Context) : AlarmApi {
         callback(Result.success(Unit))
     }
 
-    fun setAlarm(alarm: AlarmSettings) {
+    /**
+     * Arms [alarm] and records it as one of ours.
+     *
+     * Returns whether the alarm is now both stored and armed. Deliberately rolls back
+     * nothing of its own: what a failure *means* depends on the caller, which is the
+     * same reason [AlarmScheduler.schedule] leaves it alone. The Pigeon path above
+     * unsaves, because Dart is waiting for an answer and a stored-but-unarmed alarm
+     * would be reported as scheduled forever. BootReceiver must not, because native
+     * storage is the only record it re-arms from.
+     */
+    fun setAlarm(alarm: AlarmSettings): Boolean {
         if (alarmIds.contains(alarm.id)) {
             Log.w(TAG, "Stopping alarm with identical ID=${alarm.id} before scheduling a new one.")
             stopAlarm(alarm.id.toLong()) {}
@@ -138,7 +179,39 @@ class AlarmApiImpl(private val context: Context) : AlarmApi {
         // Persisting and arming live in AlarmScheduler so the snooze path can
         // reuse them without also inheriting the stop-and-replace preamble
         // above, which would report the deferral to Flutter as a stop.
-        AlarmScheduler.schedule(context, alarm)
+        return AlarmScheduler.schedule(context, alarm)
     }
 
+    /**
+     * Cancels any `AlarmManager` entry armed for [id].
+     *
+     * Rebuilding the same broadcast intent is how `AlarmManager` identifies the entry
+     * to drop: `PendingIntent` equality ignores extras, so the plain intent here
+     * matches whatever [AlarmScheduler] armed.
+     *
+     * Never throws. Both callers reach this while cleaning up — including the case
+     * where the alarm service itself is unavailable, which is one of the failures the
+     * rollback exists for — so a cancel that cannot happen must not take the rest of
+     * the cleanup, or the reply to Dart, down with it.
+     */
+    private fun cancelPendingBroadcast(id: Int) {
+        try {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            if (alarmManager == null) {
+                Log.e(TAG, "Cannot cancel alarm $id: AlarmManager is not available.")
+                return
+            }
+
+            val alarmIntent = Intent(context, AlarmReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                id,
+                alarmIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            alarmManager.cancel(pendingIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error while cancelling the pending broadcast for alarm $id", e)
+        }
+    }
 }

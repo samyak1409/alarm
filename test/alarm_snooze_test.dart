@@ -3,77 +3,10 @@ import 'package:alarm/service/alarm_storage.dart';
 import 'package:alarm/src/alarm_trigger_api_impl.dart';
 import 'package:alarm/src/generated/platform_bindings.g.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Stands in for the Android host over the real pigeon channels.
-///
-/// The snooze contract is a negotiation between Dart and the host — the host
-/// records a marker, Dart applies it, the host drops it once Dart confirms —
-/// so the interesting behaviour only shows up when both halves are present.
-/// Recording every call lets a test assert what Dart did *not* do, which is
-/// what the B1 regression is about.
-class _FakeHost {
-  _FakeHost();
-
-  final List<String> calls = <String>[];
-  final List<PendingSnoozeWire> pending = <PendingSnoozeWire>[];
-  final List<(int, int)> acknowledged = <(int, int)>[];
-  final Set<int> ringing = <int>{};
-
-  static const _prefix = 'dev.flutter.pigeon.alarm.AlarmApi.';
-
-  void install() {
-    _handle('getPendingSnoozes', (_) => <Object?>[pending.toList()]);
-    _handle('acknowledgeSnooze', (args) {
-      acknowledged.add((args![0]! as int, args[1]! as int));
-      return <Object?>[null];
-    });
-    _handle('setAlarm', (_) => <Object?>[null]);
-    _handle('stopAlarm', (_) => <Object?>[null]);
-    _handle('stopAll', (_) => <Object?>[null]);
-    _handle('isRinging', (args) {
-      final id = args?[0] as int?;
-      final result = id == null ? ringing.isNotEmpty : ringing.contains(id);
-      return <Object?>[result];
-    });
-    _handle('setWarningNotificationOnKill', (_) => <Object?>[null]);
-    _handle('disableWarningNotificationOnKill', (_) => <Object?>[null]);
-  }
-
-  void _handle(String name, Object? Function(List<Object?>? args) respond) {
-    final channel = BasicMessageChannel<Object?>(
-      '$_prefix$name',
-      AlarmApi.pigeonChannelCodec,
-    );
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockDecodedMessageHandler<Object?>(channel, (message) async {
-      calls.add(name);
-      return respond(message as List<Object?>?);
-    });
-  }
-
-  void remove() {
-    for (final name in const [
-      'getPendingSnoozes',
-      'acknowledgeSnooze',
-      'setAlarm',
-      'stopAlarm',
-      'stopAll',
-      'isRinging',
-      'setWarningNotificationOnKill',
-      'disableWarningNotificationOnKill',
-    ]) {
-      final channel = BasicMessageChannel<Object?>(
-        '$_prefix$name',
-        AlarmApi.pigeonChannelCodec,
-      );
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockDecodedMessageHandler<Object?>(channel, null);
-    }
-  }
-}
+import 'support/fake_host.dart';
 
 /// Lets already-queued microtasks run.
 ///
@@ -95,7 +28,7 @@ Future<void> hostReportsSnooze(int alarmId, DateTime nextRingAt) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  late _FakeHost host;
+  late FakeHost host;
 
   AlarmSettings buildAlarm(
     int id,
@@ -121,7 +54,7 @@ void main() {
     Alarm.resetForTesting();
     AlarmStorage.resetForTesting();
     AlarmTriggerApiImpl.resetForTesting();
-    host = _FakeHost()..install();
+    host = FakeHost()..install();
   });
 
   tearDown(() {
