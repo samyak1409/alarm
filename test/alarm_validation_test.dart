@@ -136,8 +136,8 @@ void main() {
     });
 
     test('warns when a dismiss-proof notification offers no stop button', () {
-      // Both together leave the notification with no stop affordance at all:
-      // no action button, and no delete intent behind the swipe.
+      // The swipe restores the notification rather than stopping the alarm, so
+      // with no action button either there is no stop affordance at all.
       final records = captureLogs();
 
       expect(

@@ -17,6 +17,7 @@ class AlarmReceiver : BroadcastReceiver() {
 
         const val ACTION_ALARM_STOP = "com.gdelataillade.alarm.ACTION_STOP"
         const val ACTION_ALARM_SNOOZE = "com.gdelataillade.alarm.ACTION_SNOOZE"
+        const val ACTION_ALARM_RESTORE = "com.gdelataillade.alarm.ACTION_RESTORE"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -41,6 +42,17 @@ class AlarmReceiver : BroadcastReceiver() {
                     Log.d(TAG, "Alarm stopped notification for $id processed by Flutter: ${it.isSuccess}")
                 }
             }
+            return
+        }
+
+        // Put the notification back after the user swiped it away, which is what
+        // androidStopAlarmOnDismiss = false means: the swipe must not be able to
+        // silence the alarm, and it must not be able to take away the controls
+        // either. The service decides whether the alarm is still ringing.
+        if (intent.action == ACTION_ALARM_RESTORE) {
+            val id = intent.getIntExtra("id", 0)
+            Log.d(TAG, "Received restore notification command, id: $id")
+            if (id != 0) AlarmService.instance?.restoreNotification(id)
             return
         }
 

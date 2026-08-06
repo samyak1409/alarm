@@ -1,3 +1,8 @@
+## 5.9.0
+* [Android] Fixed `Alarm.init()` cancelling an alarm that was due but had not started ringing yet, which silently lost the alarm. Past-due alarms are now left alone for 30 seconds before being stopped.
+* [Android] A failed alarm arm is now reported to Flutter as an error instead of success, and no longer leaves an alarm stored that the platform never armed. **`Alarm.set()` now throws `AlarmException` where it previously returned `true`.** A failed re-arm after a reboot keeps the alarm stored instead, so a later `Alarm.init()` can retry it.
+* [Android] `NotificationSettings.androidStopAlarmOnDismiss: false` now re-posts the notification while the alarm is still ringing, instead of letting the swipe remove the only on-screen control over a sounding alarm.
+
 ## 5.8.0
 * [Android] Added `NotificationSettings.androidStopAlarmOnDismiss` to control whether swiping the notification away also stops the alarm. Enabled by default, matching the behavior added in 5.0.3.
 

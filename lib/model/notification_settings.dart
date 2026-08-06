@@ -101,14 +101,18 @@ class NotificationSettings extends Equatable {
   /// **Android only.** iOS has no equivalent dismissal action.
   ///
   /// Android 13 made foreground service notifications user-dismissible, so
-  /// `setOngoing(true)` no longer keeps the alarm notification pinned: it can
-  /// be swiped out of the shade like any other. When this is `true` that swipe
-  /// runs the same stop action as the notification's stop button.
+  /// `setOngoing(true)` no longer keeps the alarm notification pinned while the
+  /// device is unlocked: it can be swiped out of the shade like any other. When
+  /// this is `true` that swipe runs the same stop action as the notification's
+  /// stop button.
   ///
   /// Set it to `false` if a stray swipe must not be able to silence an alarm.
-  /// Note that the notification is then gone while the alarm keeps ringing, so
-  /// the app should offer another way to stop it (for example a ringing screen
-  /// of its own, reachable from the launcher).
+  /// The swipe then puts the notification straight back, for as long as the
+  /// alarm is still ringing, so it cannot take away the controls the user needs
+  /// to act on it — give the notification a [stopButton] so there is something
+  /// to act with. This extends to an unlocked device what the platform already
+  /// guarantees on a locked one, where an ongoing notification cannot be
+  /// dismissed at all.
   ///
   /// Defaults to `true`, which is how the plugin has behaved since 5.0.3.
   final bool androidStopAlarmOnDismiss;

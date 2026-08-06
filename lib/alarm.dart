@@ -302,9 +302,9 @@ class Alarm {
         notification.stopButton == null) {
       _log.warning(
         'Alarm ${alarmSettings.id} turns off androidStopAlarmOnDismiss and '
-        'sets no stopButton, so its notification offers no way to stop the '
-        'alarm. Give it a stopButton, or present the alarm on a screen of '
-        'your own.',
+        'sets no stopButton, so its notification comes back after a swipe but '
+        'still offers no way to stop the alarm. Give it a stopButton, or '
+        'present the alarm on a screen of your own.',
       );
     }
   }
