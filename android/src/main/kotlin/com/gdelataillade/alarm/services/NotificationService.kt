@@ -46,6 +46,26 @@ class NotificationHandler(private val context: Context) {
         notificationManager.cancel(id)
     }
 
+    /**
+     * Delete intent that puts the notification for [alarmId] back.
+     *
+     * Shares the alarm id as request code with the stop and snooze intents, which
+     * is safe because `PendingIntent` identity includes the action: only the
+     * extras are ignored.
+     */
+    private fun restorePendingIntent(alarmId: Int): PendingIntent {
+        val restoreIntent = Intent(context, AlarmReceiver::class.java).apply {
+            action = AlarmReceiver.ACTION_ALARM_RESTORE
+            putExtra("id", alarmId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            restoreIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     // We need to use [Resources.getIdentifier] because resources are registered by Flutter.
     @SuppressLint("DiscouragedApi")
     fun buildNotification(
@@ -96,11 +116,21 @@ class NotificationHandler(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         // setOngoing(true) above no longer pins the notification: since Android 13 a
-        // foreground service notification can be swiped away, and this delete intent
-        // is what turns that swipe into a stop.
-        if (notificationSettings.androidStopAlarmOnDismiss) {
-            notificationBuilder.setDeleteIntent(stopPendingIntent)
-        }
+        // foreground service notification can be swiped away while the device is
+        // unlocked. The delete intent is the only signal Android gives for that
+        // swipe, so it is what decides what the swipe means.
+        //
+        // Opting out has to *restore* rather than ignore. Ignoring it leaves the
+        // alarm sounding with its only on-screen control gone, which is worse than
+        // the stray swipe the opt-out exists to prevent; re-posting extends to an
+        // unlocked device what the platform already guarantees on a locked one.
+        notificationBuilder.setDeleteIntent(
+            if (notificationSettings.androidStopAlarmOnDismiss) {
+                stopPendingIntent
+            } else {
+                restorePendingIntent(alarmId)
+            }
+        )
 
         if (fullScreen) {
             notificationBuilder.setFullScreenIntent(pendingIntent, true)

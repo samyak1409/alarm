@@ -386,6 +386,39 @@ class AlarmService : Service() {
     }
 
     /**
+     * Re-posts the ring notification for [alarmId] after the user swiped it away.
+     *
+     * Only for [AlarmReceiver], and only reached when the alarm set
+     * `androidStopAlarmOnDismiss = false`. Dismissing a foreground service
+     * notification does not stop the service, so without this the alarm keeps
+     * sounding with nothing on screen to act on it.
+     *
+     * Does nothing unless this service is currently ringing [alarmId] and owns its
+     * notification, so a dismissal that races the alarm ending cannot resurrect a
+     * notification for an alarm that is over. That guard also matters because
+     * [AlarmReceiver] is exported and the action can therefore be broadcast by
+     * anything.
+     */
+    fun restoreNotification(alarmId: Int) {
+        if (!ringingAlarmIds.contains(alarmId)) {
+            Log.d(TAG, "Not restoring the notification for $alarmId: it is not ringing.")
+            return
+        }
+
+        val notification = currentForegroundNotification
+        if (currentForegroundId != alarmId || notification == null) {
+            Log.d(TAG, "Not restoring the notification for $alarmId: this service does not own it.")
+            return
+        }
+
+        // Re-posted through startForeground rather than the notification manager so
+        // the notification stays owned by the service, and stopForeground still
+        // removes it when the alarm ends.
+        startAlarmService(alarmId, notification)
+        Log.d(TAG, "Restored the ring notification for $alarmId after a dismissal.")
+    }
+
+    /**
      * Silences [alarmId] without unsaving it or telling Flutter it stopped.
      *
      * Only for [SnoozeCoordinator], and only once it has armed the replacement:
