@@ -148,6 +148,33 @@ enum AlarmErrorCode: Int {
   case missingNotificationPermission = 4
 }
 
+/// What the host did to an alarm without the application asking.
+///
+/// Dart's handling depends only on this: [moved] rewrites the stored time,
+/// [dropped] removes the alarm. The [AlarmEventCauseWire] is for the app.
+enum AlarmEventVerbWire: Int {
+  /// The alarm is still owed and is now registered for a different time.
+  case moved = 0
+  /// The alarm is gone and will not ring.
+  case dropped = 1
+}
+
+/// Why the host changed an alarm.
+enum AlarmEventCauseWire: Int {
+  /// The user deferred the alarm from the notification or the ring screen.
+  case snooze = 0
+  /// The platform refused to let the ring start, so it was re-armed later.
+  ///
+  /// Android forbids starting a `mediaPlayback` foreground service from
+  /// `BOOT_COMPLETED`, and the refusal follows the attribution rather than the
+  /// caller, so an ordinary alarm delivered inside the boot window is refused
+  /// too. Ringing late beats not ringing.
+  case platformRefusal = 1
+  /// The alarm's time had already passed while the device was off, so it was
+  /// discarded at boot rather than sounded hours late.
+  case staleAtBoot = 2
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct AlarmSettingsWire: Hashable {
   var id: Int64
@@ -376,31 +403,46 @@ struct NotificationSettingsWire: Hashable {
   }
 }
 
-/// A snooze the host recorded and Dart has not yet applied.
+/// A change the host made to an alarm that Dart has not yet applied.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
-struct PendingSnoozeWire: Hashable {
+struct AlarmEventWire: Hashable {
   var alarmId: Int64
-  var millisecondsSinceEpoch: Int64
+  var verb: AlarmEventVerbWire
+  var cause: AlarmEventCauseWire
+  /// For [AlarmEventVerbWire.moved], when the alarm now rings. For
+  /// [AlarmEventVerbWire.dropped], when it should have rung.
+  var atMillis: Int64
+  /// When the host recorded this, used to acknowledge exactly this event.
+  var recordedAtMillis: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
-  static func fromList(_ pigeonVar_list: [Any?]) -> PendingSnoozeWire? {
+  static func fromList(_ pigeonVar_list: [Any?]) -> AlarmEventWire? {
     let alarmId = pigeonVar_list[0] as! Int64
-    let millisecondsSinceEpoch = pigeonVar_list[1] as! Int64
+    let verb = pigeonVar_list[1] as! AlarmEventVerbWire
+    let cause = pigeonVar_list[2] as! AlarmEventCauseWire
+    let atMillis = pigeonVar_list[3] as! Int64
+    let recordedAtMillis = pigeonVar_list[4] as! Int64
 
-    return PendingSnoozeWire(
+    return AlarmEventWire(
       alarmId: alarmId,
-      millisecondsSinceEpoch: millisecondsSinceEpoch
+      verb: verb,
+      cause: cause,
+      atMillis: atMillis,
+      recordedAtMillis: recordedAtMillis
     )
   }
   func toList() -> [Any?] {
     return [
       alarmId,
-      millisecondsSinceEpoch,
+      verb,
+      cause,
+      atMillis,
+      recordedAtMillis,
     ]
   }
-  static func == (lhs: PendingSnoozeWire, rhs: PendingSnoozeWire) -> Bool {
+  static func == (lhs: AlarmEventWire, rhs: AlarmEventWire) -> Bool {
     return deepEqualsFlutterBindings(lhs.toList(), rhs.toList())  }
   func hash(into hasher: inout Hasher) {
     deepHashFlutterBindings(value: toList(), hasher: &hasher)
@@ -417,15 +459,27 @@ private class FlutterBindingsPigeonCodecReader: FlutterStandardReader {
       }
       return nil
     case 130:
-      return AlarmSettingsWire.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return AlarmEventVerbWire(rawValue: enumResultAsInt)
+      }
+      return nil
     case 131:
-      return VolumeSettingsWire.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return AlarmEventCauseWire(rawValue: enumResultAsInt)
+      }
+      return nil
     case 132:
-      return VolumeFadeStepWire.fromList(self.readValue() as! [Any?])
+      return AlarmSettingsWire.fromList(self.readValue() as! [Any?])
     case 133:
-      return NotificationSettingsWire.fromList(self.readValue() as! [Any?])
+      return VolumeSettingsWire.fromList(self.readValue() as! [Any?])
     case 134:
-      return PendingSnoozeWire.fromList(self.readValue() as! [Any?])
+      return VolumeFadeStepWire.fromList(self.readValue() as! [Any?])
+    case 135:
+      return NotificationSettingsWire.fromList(self.readValue() as! [Any?])
+    case 136:
+      return AlarmEventWire.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -437,20 +491,26 @@ private class FlutterBindingsPigeonCodecWriter: FlutterStandardWriter {
     if let value = value as? AlarmErrorCode {
       super.writeByte(129)
       super.writeValue(value.rawValue)
-    } else if let value = value as? AlarmSettingsWire {
+    } else if let value = value as? AlarmEventVerbWire {
       super.writeByte(130)
-      super.writeValue(value.toList())
-    } else if let value = value as? VolumeSettingsWire {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? AlarmEventCauseWire {
       super.writeByte(131)
-      super.writeValue(value.toList())
-    } else if let value = value as? VolumeFadeStepWire {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? AlarmSettingsWire {
       super.writeByte(132)
       super.writeValue(value.toList())
-    } else if let value = value as? NotificationSettingsWire {
+    } else if let value = value as? VolumeSettingsWire {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? PendingSnoozeWire {
+    } else if let value = value as? VolumeFadeStepWire {
       super.writeByte(134)
+      super.writeValue(value.toList())
+    } else if let value = value as? NotificationSettingsWire {
+      super.writeByte(135)
+      super.writeValue(value.toList())
+    } else if let value = value as? AlarmEventWire {
+      super.writeByte(136)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -481,24 +541,25 @@ protocol AlarmApi {
   func isRinging(alarmId: Int64?) throws -> Bool
   func setWarningNotificationOnKill(title: String, body: String) throws
   func disableWarningNotificationOnKill() throws
-  /// Lists snoozes the host has recorded but Dart has not yet applied.
+  /// Lists changes the host has made to alarms that Dart has not yet applied.
   ///
-  /// A snooze is normally taken with no engine running: the notification is
-  /// native and a full screen intent starts the process without starting
-  /// Flutter, so [AlarmTriggerApi.alarmSnoozed] reaches nobody. The host holds
-  /// a marker until Dart has durably applied it.
+  /// These decisions are normally taken with no engine running: the
+  /// notification is native, a full screen intent starts the process without
+  /// starting Flutter, and `BootReceiver` runs before any app code, so
+  /// [AlarmTriggerApi.alarmEvent] reaches nobody. The host holds a marker until
+  /// Dart has durably applied it.
   ///
-  /// Reading is **not** destructive — the marker survives until
-  /// [acknowledgeSnooze] confirms Dart wrote the new time. A read that is
-  /// followed by a crash therefore loses nothing.
-  func getPendingSnoozes(completion: @escaping (Result<[PendingSnoozeWire], Error>) -> Void)
+  /// Reading is **not** destructive — a marker survives until
+  /// [acknowledgeAlarmEvent] confirms Dart applied it. A read that is followed
+  /// by a crash therefore loses nothing.
+  func getPendingAlarmEvents(completion: @escaping (Result<[AlarmEventWire], Error>) -> Void)
   /// Drops the marker for [alarmId], but only if it still records exactly
-  /// [nextRingAtMillis].
+  /// [recordedAtMillis].
   ///
   /// Matching on the timestamp as well as the id means a late acknowledgement
-  /// for an earlier snooze cannot discard a newer one taken for the same
+  /// for an earlier event cannot discard a newer one recorded for the same
   /// alarm in the meantime.
-  func acknowledgeSnooze(alarmId: Int64, nextRingAtMillis: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  func acknowledgeAlarmEvent(alarmId: Int64, recordedAtMillis: Int64, completion: @escaping (Result<Void, Error>) -> Void)
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -600,20 +661,21 @@ class AlarmApiSetup {
     } else {
       disableWarningNotificationOnKillChannel.setMessageHandler(nil)
     }
-    /// Lists snoozes the host has recorded but Dart has not yet applied.
+    /// Lists changes the host has made to alarms that Dart has not yet applied.
     ///
-    /// A snooze is normally taken with no engine running: the notification is
-    /// native and a full screen intent starts the process without starting
-    /// Flutter, so [AlarmTriggerApi.alarmSnoozed] reaches nobody. The host holds
-    /// a marker until Dart has durably applied it.
+    /// These decisions are normally taken with no engine running: the
+    /// notification is native, a full screen intent starts the process without
+    /// starting Flutter, and `BootReceiver` runs before any app code, so
+    /// [AlarmTriggerApi.alarmEvent] reaches nobody. The host holds a marker until
+    /// Dart has durably applied it.
     ///
-    /// Reading is **not** destructive — the marker survives until
-    /// [acknowledgeSnooze] confirms Dart wrote the new time. A read that is
-    /// followed by a crash therefore loses nothing.
-    let getPendingSnoozesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.alarm.AlarmApi.getPendingSnoozes\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    /// Reading is **not** destructive — a marker survives until
+    /// [acknowledgeAlarmEvent] confirms Dart applied it. A read that is followed
+    /// by a crash therefore loses nothing.
+    let getPendingAlarmEventsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.alarm.AlarmApi.getPendingAlarmEvents\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      getPendingSnoozesChannel.setMessageHandler { _, reply in
-        api.getPendingSnoozes { result in
+      getPendingAlarmEventsChannel.setMessageHandler { _, reply in
+        api.getPendingAlarmEvents { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -623,21 +685,21 @@ class AlarmApiSetup {
         }
       }
     } else {
-      getPendingSnoozesChannel.setMessageHandler(nil)
+      getPendingAlarmEventsChannel.setMessageHandler(nil)
     }
     /// Drops the marker for [alarmId], but only if it still records exactly
-    /// [nextRingAtMillis].
+    /// [recordedAtMillis].
     ///
     /// Matching on the timestamp as well as the id means a late acknowledgement
-    /// for an earlier snooze cannot discard a newer one taken for the same
+    /// for an earlier event cannot discard a newer one recorded for the same
     /// alarm in the meantime.
-    let acknowledgeSnoozeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.alarm.AlarmApi.acknowledgeSnooze\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let acknowledgeAlarmEventChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.alarm.AlarmApi.acknowledgeAlarmEvent\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      acknowledgeSnoozeChannel.setMessageHandler { message, reply in
+      acknowledgeAlarmEventChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let alarmIdArg = args[0] as! Int64
-        let nextRingAtMillisArg = args[1] as! Int64
-        api.acknowledgeSnooze(alarmId: alarmIdArg, nextRingAtMillis: nextRingAtMillisArg) { result in
+        let recordedAtMillisArg = args[1] as! Int64
+        api.acknowledgeAlarmEvent(alarmId: alarmIdArg, recordedAtMillis: recordedAtMillisArg) { result in
           switch result {
           case .success:
             reply(wrapResult(nil))
@@ -647,7 +709,7 @@ class AlarmApiSetup {
         }
       }
     } else {
-      acknowledgeSnoozeChannel.setMessageHandler(nil)
+      acknowledgeAlarmEventChannel.setMessageHandler(nil)
     }
   }
 }
@@ -655,13 +717,16 @@ class AlarmApiSetup {
 protocol AlarmTriggerApiProtocol {
   func alarmRang(alarmId alarmIdArg: Int64, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func alarmStopped(alarmId alarmIdArg: Int64, completion: @escaping (Result<Void, PigeonError>) -> Void)
-  /// An alarm was deferred on the host side and re-registered for
-  /// [millisecondsSinceEpoch].
+  /// The host moved or dropped an alarm on its own.
   ///
-  /// Distinct from [alarmStopped] because the alarm is still owed: reporting a
-  /// snooze as a stop would tell the application the user dismissed something
-  /// they asked to be reminded of again.
-  func alarmSnoozed(alarmId alarmIdArg: Int64, millisecondsSinceEpoch millisecondsSinceEpochArg: Int64, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  /// Distinct from [alarmStopped], which means the user resolved the alarm. A
+  /// deferral reported as a stop would tell the application it was dismissed;
+  /// a discard reported as a stop would hide that the alarm never rang.
+  ///
+  /// Only reaches Dart when an engine happens to be attached. The durable
+  /// record is the host's marker, drained by `AlarmApi.getPendingAlarmEvents`,
+  /// so this call is an optimisation rather than the contract.
+  func alarmEvent(event eventArg: AlarmEventWire, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class AlarmTriggerApi: AlarmTriggerApiProtocol {
   private let binaryMessenger: FlutterBinaryMessenger
@@ -709,16 +774,19 @@ class AlarmTriggerApi: AlarmTriggerApiProtocol {
       }
     }
   }
-  /// An alarm was deferred on the host side and re-registered for
-  /// [millisecondsSinceEpoch].
+  /// The host moved or dropped an alarm on its own.
   ///
-  /// Distinct from [alarmStopped] because the alarm is still owed: reporting a
-  /// snooze as a stop would tell the application the user dismissed something
-  /// they asked to be reminded of again.
-  func alarmSnoozed(alarmId alarmIdArg: Int64, millisecondsSinceEpoch millisecondsSinceEpochArg: Int64, completion: @escaping (Result<Void, PigeonError>) -> Void) {
-    let channelName: String = "dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed\(messageChannelSuffix)"
+  /// Distinct from [alarmStopped], which means the user resolved the alarm. A
+  /// deferral reported as a stop would tell the application it was dismissed;
+  /// a discard reported as a stop would hide that the alarm never rang.
+  ///
+  /// Only reaches Dart when an engine happens to be attached. The durable
+  /// record is the host's marker, drained by `AlarmApi.getPendingAlarmEvents`,
+  /// so this call is an optimisation rather than the contract.
+  func alarmEvent(event eventArg: AlarmEventWire, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmEvent\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-    channel.sendMessage([alarmIdArg, millisecondsSinceEpochArg] as [Any?]) { response in
+    channel.sendMessage([eventArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {
         completion(.failure(createConnectionError(withChannelName: channelName)))
         return

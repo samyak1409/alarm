@@ -160,41 +160,83 @@ abstract class AlarmApi {
 
   void disableWarningNotificationOnKill();
 
-  /// Lists snoozes the host has recorded but Dart has not yet applied.
+  /// Lists changes the host has made to alarms that Dart has not yet applied.
   ///
-  /// A snooze is normally taken with no engine running: the notification is
-  /// native and a full screen intent starts the process without starting
-  /// Flutter, so [AlarmTriggerApi.alarmSnoozed] reaches nobody. The host holds
-  /// a marker until Dart has durably applied it.
+  /// These decisions are normally taken with no engine running: the
+  /// notification is native, a full screen intent starts the process without
+  /// starting Flutter, and `BootReceiver` runs before any app code, so
+  /// [AlarmTriggerApi.alarmEvent] reaches nobody. The host holds a marker until
+  /// Dart has durably applied it.
   ///
-  /// Reading is **not** destructive — the marker survives until
-  /// [acknowledgeSnooze] confirms Dart wrote the new time. A read that is
-  /// followed by a crash therefore loses nothing.
+  /// Reading is **not** destructive — a marker survives until
+  /// [acknowledgeAlarmEvent] confirms Dart applied it. A read that is followed
+  /// by a crash therefore loses nothing.
   @async
-  List<PendingSnoozeWire> getPendingSnoozes();
+  List<AlarmEventWire> getPendingAlarmEvents();
 
   /// Drops the marker for [alarmId], but only if it still records exactly
-  /// [nextRingAtMillis].
+  /// [recordedAtMillis].
   ///
   /// Matching on the timestamp as well as the id means a late acknowledgement
-  /// for an earlier snooze cannot discard a newer one taken for the same
+  /// for an earlier event cannot discard a newer one recorded for the same
   /// alarm in the meantime.
   @async
-  void acknowledgeSnooze({
+  void acknowledgeAlarmEvent({
     required int alarmId,
-    required int nextRingAtMillis,
+    required int recordedAtMillis,
   });
 }
 
-/// A snooze the host recorded and Dart has not yet applied.
-class PendingSnoozeWire {
-  const PendingSnoozeWire({
+/// What the host did to an alarm without the application asking.
+///
+/// Dart's handling depends only on this: [moved] rewrites the stored time,
+/// [dropped] removes the alarm. The [AlarmEventCauseWire] is for the app.
+enum AlarmEventVerbWire {
+  /// The alarm is still owed and is now registered for a different time.
+  moved,
+
+  /// The alarm is gone and will not ring.
+  dropped,
+}
+
+/// Why the host changed an alarm.
+enum AlarmEventCauseWire {
+  /// The user deferred the alarm from the notification or the ring screen.
+  snooze,
+
+  /// The platform refused to let the ring start, so it was re-armed later.
+  ///
+  /// Android forbids starting a `mediaPlayback` foreground service from
+  /// `BOOT_COMPLETED`, and the refusal follows the attribution rather than the
+  /// caller, so an ordinary alarm delivered inside the boot window is refused
+  /// too. Ringing late beats not ringing.
+  platformRefusal,
+
+  /// The alarm's time had already passed while the device was off, so it was
+  /// discarded at boot rather than sounded hours late.
+  staleAtBoot,
+}
+
+/// A change the host made to an alarm that Dart has not yet applied.
+class AlarmEventWire {
+  const AlarmEventWire({
     required this.alarmId,
-    required this.millisecondsSinceEpoch,
+    required this.verb,
+    required this.cause,
+    required this.atMillis,
+    required this.recordedAtMillis,
   });
 
   final int alarmId;
-  final int millisecondsSinceEpoch;
+  final AlarmEventVerbWire verb;
+  final AlarmEventCauseWire cause;
+
+  /// For [AlarmEventVerbWire.moved], when the alarm now rings. For
+  /// [AlarmEventVerbWire.dropped], when it should have rung.
+  final int atMillis;
+
+  /// When the host recorded this, used to acknowledge exactly this event.
+  final int recordedAtMillis;
 }
 
 @FlutterApi()
@@ -205,12 +247,15 @@ abstract class AlarmTriggerApi {
   @async
   void alarmStopped(int alarmId);
 
-  /// An alarm was deferred on the host side and re-registered for
-  /// [millisecondsSinceEpoch].
+  /// The host moved or dropped an alarm on its own.
   ///
-  /// Distinct from [alarmStopped] because the alarm is still owed: reporting a
-  /// snooze as a stop would tell the application the user dismissed something
-  /// they asked to be reminded of again.
+  /// Distinct from [alarmStopped], which means the user resolved the alarm. A
+  /// deferral reported as a stop would tell the application it was dismissed;
+  /// a discard reported as a stop would hide that the alarm never rang.
+  ///
+  /// Only reaches Dart when an engine happens to be attached. The durable
+  /// record is the host's marker, drained by `AlarmApi.getPendingAlarmEvents`,
+  /// so this call is an optimisation rather than the contract.
   @async
-  void alarmSnoozed(int alarmId, int millisecondsSinceEpoch);
+  void alarmEvent(AlarmEventWire event);
 }

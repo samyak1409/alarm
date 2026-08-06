@@ -14,7 +14,7 @@ class FakeHost {
   FakeHost();
 
   final List<String> calls = <String>[];
-  final List<PendingSnoozeWire> pending = <PendingSnoozeWire>[];
+  final List<AlarmEventWire> pending = <AlarmEventWire>[];
   final List<(int, int)> acknowledged = <(int, int)>[];
   final Set<int> ringing = <int>{};
 
@@ -29,8 +29,8 @@ class FakeHost {
   static const _prefix = 'dev.flutter.pigeon.alarm.AlarmApi.';
 
   static const _methods = <String>[
-    'getPendingSnoozes',
-    'acknowledgeSnooze',
+    'getPendingAlarmEvents',
+    'acknowledgeAlarmEvent',
     'setAlarm',
     'stopAlarm',
     'stopAll',
@@ -40,8 +40,8 @@ class FakeHost {
   ];
 
   void install() {
-    _handle('getPendingSnoozes', (_) => <Object?>[pending.toList()]);
-    _handle('acknowledgeSnooze', (args) {
+    _handle('getPendingAlarmEvents', (_) => <Object?>[pending.toList()]);
+    _handle('acknowledgeAlarmEvent', (args) {
       acknowledged.add((args![0]! as int, args[1]! as int));
       return <Object?>[null];
     });
@@ -83,4 +83,61 @@ class FakeHost {
           .setMockDecodedMessageHandler<Object?>(channel, null);
     }
   }
+}
+
+/// Builds the wire event a user snooze produces.
+///
+/// `recordedAtMillis` defaults to the ring time, matching how the host treats a
+/// marker written by an older plugin version: with nothing recording *when* it
+/// was written, the ring time doubles as the acknowledgement key.
+AlarmEventWire snoozeEvent(
+  int alarmId,
+  DateTime nextRingAt, {
+  DateTime? recordedAt,
+}) =>
+    AlarmEventWire(
+      alarmId: alarmId,
+      verb: AlarmEventVerbWire.moved,
+      cause: AlarmEventCauseWire.snooze,
+      atMillis: nextRingAt.millisecondsSinceEpoch,
+      recordedAtMillis: (recordedAt ?? nextRingAt).millisecondsSinceEpoch,
+    );
+
+/// Builds the wire event a stale-at-boot discard produces.
+AlarmEventWire droppedEvent(
+  int alarmId,
+  DateTime scheduledFor, {
+  DateTime? recordedAt,
+}) =>
+    AlarmEventWire(
+      alarmId: alarmId,
+      verb: AlarmEventVerbWire.dropped,
+      cause: AlarmEventCauseWire.staleAtBoot,
+      atMillis: scheduledFor.millisecondsSinceEpoch,
+      recordedAtMillis: (recordedAt ?? scheduledFor).millisecondsSinceEpoch,
+    );
+
+/// Builds the wire event a ring the platform refused produces.
+AlarmEventWire refusedRingEvent(
+  int alarmId,
+  DateTime nextRingAt, {
+  DateTime? recordedAt,
+}) =>
+    AlarmEventWire(
+      alarmId: alarmId,
+      verb: AlarmEventVerbWire.moved,
+      cause: AlarmEventCauseWire.platformRefusal,
+      atMillis: nextRingAt.millisecondsSinceEpoch,
+      recordedAtMillis: (recordedAt ?? nextRingAt).millisecondsSinceEpoch,
+    );
+
+/// Delivers an `alarmEvent` call the way the host would when an engine happens
+/// to be attached, and completes only when Dart has finished handling it.
+Future<void> hostReportsEvent(AlarmEventWire event) async {
+  const channelName = 'dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmEvent';
+  final encoded = AlarmTriggerApi.pigeonChannelCodec.encodeMessage(
+    <Object?>[event],
+  );
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(channelName, encoded, (_) {});
 }

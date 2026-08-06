@@ -1,7 +1,6 @@
 import 'package:alarm/alarm.dart';
 import 'package:alarm/service/alarm_storage.dart';
 import 'package:alarm/src/alarm_trigger_api_impl.dart';
-import 'package:alarm/src/generated/platform_bindings.g.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,16 +13,9 @@ import 'support/fake_host.dart';
 /// microtask rather than synchronously with the `add`.
 Future<void> pump() => Future<void>.delayed(Duration.zero);
 
-/// Delivers an `alarmSnoozed` call the way the host would, and completes only
-/// when Dart has finished handling it.
-Future<void> hostReportsSnooze(int alarmId, DateTime nextRingAt) async {
-  const channelName = 'dev.flutter.pigeon.alarm.AlarmTriggerApi.alarmSnoozed';
-  final encoded = AlarmTriggerApi.pigeonChannelCodec.encodeMessage(
-    <Object?>[alarmId, nextRingAt.millisecondsSinceEpoch],
-  );
-  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-      .handlePlatformMessage(channelName, encoded, (_) {});
-}
+/// Delivers the snooze the way the host would when an engine is attached.
+Future<void> hostReportsSnooze(int alarmId, DateTime nextRingAt) =>
+    hostReportsEvent(snoozeEvent(alarmId, nextRingAt));
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -77,10 +69,7 @@ void main() {
         final nextRingAt = DateTime.now().add(const Duration(minutes: 7));
         await AlarmStorage.saveAlarm(buildAlarm(42, originalTime));
         host.pending.add(
-          PendingSnoozeWire(
-            alarmId: 42,
-            millisecondsSinceEpoch: nextRingAt.millisecondsSinceEpoch,
-          ),
+          snoozeEvent(42, nextRingAt),
         );
 
         await Alarm.init();
@@ -108,10 +97,7 @@ void main() {
         buildAlarm(7, DateTime.now().subtract(const Duration(minutes: 1))),
       );
       host.pending.add(
-        PendingSnoozeWire(
-          alarmId: 7,
-          millisecondsSinceEpoch: nextRingAt.millisecondsSinceEpoch,
-        ),
+        snoozeEvent(7, nextRingAt),
       );
 
       await Alarm.init();
@@ -127,10 +113,7 @@ void main() {
         buildAlarm(3, DateTime.now().subtract(const Duration(minutes: 1))),
       );
       host.pending.add(
-        PendingSnoozeWire(
-          alarmId: 3,
-          millisecondsSinceEpoch: nextRingAt.millisecondsSinceEpoch,
-        ),
+        snoozeEvent(3, nextRingAt),
       );
 
       await Alarm.init();
@@ -149,10 +132,7 @@ void main() {
       final stalePending = DateTime.now().subtract(const Duration(minutes: 10));
       await AlarmStorage.saveAlarm(buildAlarm(11, original));
       host.pending.add(
-        PendingSnoozeWire(
-          alarmId: 11,
-          millisecondsSinceEpoch: stalePending.millisecondsSinceEpoch,
-        ),
+        snoozeEvent(11, stalePending),
       );
 
       await Alarm.init();
@@ -168,10 +148,7 @@ void main() {
       final nextRingAt = DateTime.now().add(const Duration(minutes: 7));
       await AlarmStorage.saveAlarm(buildAlarm(99, nextRingAt));
       host.pending.add(
-        PendingSnoozeWire(
-          alarmId: 99,
-          millisecondsSinceEpoch: nextRingAt.millisecondsSinceEpoch,
-        ),
+        snoozeEvent(99, nextRingAt),
       );
 
       await Alarm.init();

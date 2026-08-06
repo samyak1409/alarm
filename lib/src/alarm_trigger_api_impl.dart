@@ -9,24 +9,23 @@ typedef AlarmRangCallback = void Function(AlarmSettings alarm);
 /// Callback that is called when an alarm is stopped.
 typedef AlarmStoppedCallback = void Function(int alarmId);
 
-/// Callback that is called when an alarm is deferred on the host side.
+/// Callback that is called when the host changed an alarm on its own.
 ///
-/// Returns a future the host awaits before treating the deferral as observed,
-/// so it must not complete until the new time is durably stored.
-typedef AlarmSnoozedCallback = Future<void> Function(
-  int alarmId,
-  DateTime nextRingAt,
-);
+/// Returns a future the host awaits before treating the change as observed, so
+/// it must not complete until the change is durably applied. The host keeps its
+/// own marker until then, so completing early costs the event rather than
+/// duplicating it.
+typedef AlarmEventCallback = Future<void> Function(AlarmEvent event);
 
 /// Implements the API that handles calls coming from the host platform.
 class AlarmTriggerApiImpl extends AlarmTriggerApi {
   AlarmTriggerApiImpl._({
     required AlarmRangCallback alarmRang,
     required AlarmStoppedCallback alarmStopped,
-    required AlarmSnoozedCallback alarmSnoozed,
+    required AlarmEventCallback alarmEvent,
   })  : _alarmRang = alarmRang,
         _alarmStopped = alarmStopped,
-        _alarmSnoozed = alarmSnoozed,
+        _alarmEvent = alarmEvent,
         super() {
     AlarmTriggerApi.setUp(this);
   }
@@ -40,7 +39,7 @@ class AlarmTriggerApiImpl extends AlarmTriggerApi {
 
   final AlarmStoppedCallback _alarmStopped;
 
-  final AlarmSnoozedCallback _alarmSnoozed;
+  final AlarmEventCallback _alarmEvent;
 
   /// Forgets the cached instance so the next [ensureInitialized] rebuilds it.
   ///
@@ -55,12 +54,12 @@ class AlarmTriggerApiImpl extends AlarmTriggerApi {
   static void ensureInitialized({
     required AlarmRangCallback alarmRang,
     required AlarmStoppedCallback alarmStopped,
-    required AlarmSnoozedCallback alarmSnoozed,
+    required AlarmEventCallback alarmEvent,
   }) {
     _instance ??= AlarmTriggerApiImpl._(
       alarmRang: alarmRang,
       alarmStopped: alarmStopped,
-      alarmSnoozed: alarmSnoozed,
+      alarmEvent: alarmEvent,
     );
   }
 
@@ -84,13 +83,20 @@ class AlarmTriggerApiImpl extends AlarmTriggerApi {
   }
 
   @override
-  Future<void> alarmSnoozed(int alarmId, int millisecondsSinceEpoch) async {
-    final nextRingAt =
-        DateTime.fromMillisecondsSinceEpoch(millisecondsSinceEpoch);
-    _log.info('Alarm with id $alarmId snoozed until $nextRingAt.');
-    // Awaited so the reply to the host is sent only once Dart has persisted
-    // the new time. The host uses that reply to decide whether it can drop its
-    // own reconciliation marker.
-    await _alarmSnoozed(alarmId, nextRingAt);
+  Future<void> alarmEvent(AlarmEventWire event) async {
+    final parsed = AlarmEvent.fromWire(event);
+    switch (parsed) {
+      case AlarmMoved():
+        _log.info('Alarm with id ${parsed.id} moved to ${parsed.nextRingAt} '
+            '(${parsed.cause.name}).');
+      case AlarmDropped():
+        _log.info('Alarm with id ${parsed.id} was dropped by the host '
+            '(${parsed.cause.name}); it should have rung at '
+            '${parsed.scheduledFor}.');
+    }
+    // Awaited so the reply to the host is sent only once Dart has applied the
+    // change. The host uses that reply to decide whether it can drop its own
+    // reconciliation marker.
+    await _alarmEvent(parsed);
   }
 }

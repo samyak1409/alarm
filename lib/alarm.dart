@@ -3,6 +3,7 @@
 
 import 'dart:async';
 
+import 'package:alarm/model/alarm_event.dart';
 import 'package:alarm/model/alarm_settings.dart';
 import 'package:alarm/service/alarm_storage.dart';
 import 'package:alarm/src/alarm_trigger_api_impl.dart';
@@ -17,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 import 'package:rxdart/rxdart.dart';
 
+export 'package:alarm/model/alarm_event.dart';
 export 'package:alarm/model/alarm_settings.dart';
 export 'package:alarm/model/notification_settings.dart';
 export 'package:alarm/model/volume_settings.dart';
@@ -38,6 +40,8 @@ class Alarm {
   static final _snoozed =
       StreamController<({int id, DateTime nextRingAt})>.broadcast();
 
+  static final _events = StreamController<AlarmEvent>.broadcast();
+
   /// Stream of the scheduled alarms.
   static ValueStream<AlarmSet> get scheduled => _scheduled.stream;
 
@@ -50,7 +54,24 @@ class Alarm {
   /// A snooze never reaches [ringing] as a stop: the alarm is still owed, and
   /// an application tracking its own alarm state needs to record a deferral
   /// rather than a dismissal.
+  ///
+  /// Only covers user snoozes. [events] reports every change the host makes to
+  /// an alarm on its own, including deferrals the platform forced and alarms
+  /// discarded as stale, and is the stream to prefer for new code.
   static Stream<({int id, DateTime nextRingAt})> get snoozed => _snoozed.stream;
+
+  /// Stream of changes the host made to alarms without the app asking.
+  ///
+  /// The host takes these decisions where no Flutter engine is running — a
+  /// native notification action, a full screen intent, the boot receiver — so
+  /// they are recorded durably and drained on the next [init]. An event can
+  /// therefore arrive long after it happened, and the same event never arrives
+  /// twice.
+  ///
+  /// The plugin deliberately shows the user nothing for these. An
+  /// [AlarmDropped] in particular is worth surfacing, but only the application
+  /// can do it in its own voice and its own records.
+  static Stream<AlarmEvent> get events => _events.stream;
 
   /// Stream of the alarm updates.
   ///
@@ -74,7 +95,7 @@ class Alarm {
     AlarmTriggerApiImpl.ensureInitialized(
       alarmRang: alarmRang,
       alarmStopped: _alarmStopped,
-      alarmSnoozed: _alarmSnoozed,
+      alarmEvent: _alarmEvent,
     );
 
     await AlarmStorage.init();
@@ -126,18 +147,18 @@ class Alarm {
   static const _ringStartGrace = Duration(seconds: 30);
 
   static Future<void> _checkAlarm() async {
-    final snoozed = await _applyPendingSnoozes();
+    final handled = await _applyPendingEvents();
 
     final alarms = await getAlarms();
 
     if (iOS) await stopAll();
 
     for (final alarm in alarms) {
-      // Just reconciled from a snooze marker: the native alarm is already
-      // armed for the new time and both stores agree, so set() would only
-      // cancel and re-arm it — and stop() inside set() reports a spurious
-      // alarmStopped on the way through.
-      if (snoozed.contains(alarm.id)) continue;
+      // Just reconciled from a host event: for a move the native alarm is
+      // already armed for the new time and both stores agree, so set() would
+      // only cancel and re-arm it — and stop() inside set() reports a spurious
+      // alarmStopped on the way through. For a drop the alarm is already gone.
+      if (handled.contains(alarm.id)) continue;
 
       final now = DateTime.now();
       if (alarm.dateTime.isAfter(now)) {
@@ -419,64 +440,102 @@ class Alarm {
     ringStream.add(alarm);
   }
 
-  /// Applies snoozes the host recorded while no isolate was listening.
+  /// Applies changes the host recorded while no isolate was listening.
   ///
-  /// The notification is native and a full screen intent starts the process
-  /// without starting Flutter, so a deferral taken there is normally observed
-  /// only here. Runs before [checkAlarm]'s reschedule loop: until the shifted
-  /// time is in Dart storage, that loop sees the original past time and stops
-  /// the alarm, undoing the snooze.
+  /// The notification is native, a full screen intent starts the process
+  /// without starting Flutter, and the boot receiver runs before any app code,
+  /// so a
+  /// decision taken in those places is normally observed only here. Runs before
+  /// [checkAlarm]'s reschedule loop: until a deferral is in Dart storage, that
+  /// loop sees the original past time and stops the alarm, undoing it.
   ///
   /// Ids that were applied here are returned so the caller can leave them
   /// alone — the native alarm and native storage are already correct, so
   /// rescheduling them would cancel and re-arm for no reason.
-  static Future<Set<int>> _applyPendingSnoozes() async {
-    final List<PendingSnoozeWire> pending;
+  static Future<Set<int>> _applyPendingEvents() async {
+    final List<AlarmEventWire> pending;
     try {
-      pending = await AlarmApi().getPendingSnoozes();
+      pending = await AlarmApi().getPendingAlarmEvents();
     } on Object catch (error) {
       // Never let this break init: fall through to the normal reschedule loop.
-      _log.warning('Could not read pending snoozes: $error');
+      _log.warning('Could not read pending alarm events: $error');
       return {};
     }
 
     final applied = <int>{};
-    for (final snooze in pending) {
-      final nextRingAt =
-          DateTime.fromMillisecondsSinceEpoch(snooze.millisecondsSinceEpoch);
+    for (final wire in pending) {
       try {
-        if (await _applySnooze(snooze.alarmId, nextRingAt)) {
-          applied.add(snooze.alarmId);
+        if (await _applyEvent(AlarmEvent.fromWire(wire))) {
+          applied.add(wire.alarmId);
         }
-        // Acknowledged either way: an applied snooze is durable, and one that
+        // Acknowledged either way: an applied event is durable, and one that
         // could not be applied is not going to become applicable later.
-        await AlarmApi().acknowledgeSnooze(
-          alarmId: snooze.alarmId,
-          nextRingAtMillis: snooze.millisecondsSinceEpoch,
+        await AlarmApi().acknowledgeAlarmEvent(
+          alarmId: wire.alarmId,
+          recordedAtMillis: wire.recordedAtMillis,
         );
       } on Object catch (error) {
-        _log.warning('Could not apply snooze ${snooze.alarmId}: $error');
+        _log.warning('Could not apply alarm event ${wire.alarmId}: $error');
       }
     }
     return applied;
   }
 
-  /// PRIVATE: Called by the native platform when an alarm was deferred there.
-  static Future<void> _alarmSnoozed(int alarmId, DateTime nextRingAt) async {
-    await _applySnooze(alarmId, nextRingAt);
+  /// PRIVATE: Called by the native platform when it changed an alarm itself.
+  static Future<void> _alarmEvent(AlarmEvent event) async {
+    await _applyEvent(event);
   }
 
-  /// Moves [alarmId] to [nextRingAt] in Dart's own state, and reports it.
+  /// Applies [event] to Dart's own state, and reports it.
   ///
-  /// Shared by the live callback and startup reconciliation so both produce
-  /// the same result. Idempotent: applying a snooze already applied changes
-  /// nothing and emits nothing.
+  /// Shared by the live callback and startup reconciliation so both produce the
+  /// same result, which matters because which one arrives first depends only on
+  /// whether an engine happened to be attached.
   ///
-  /// Returns whether the alarm now rings at [nextRingAt].
-  static Future<bool> _applySnooze(int alarmId, DateTime nextRingAt) async {
+  /// Returns whether [checkAlarm] should leave this alarm alone: native storage
+  /// and the native alarm are already correct, so rescheduling would cancel and
+  /// re-arm for no reason.
+  static Future<bool> _applyEvent(AlarmEvent event) async {
+    switch (event) {
+      case AlarmMoved():
+        return _applyMove(event);
+      case AlarmDropped():
+        return _applyDrop(event);
+    }
+  }
+
+  /// Removes an alarm the host has already discarded, and reports it.
+  ///
+  /// Nothing is cancelled here: the host dropped it before recording the event,
+  /// so this only brings Dart's own store and streams into line and tells the
+  /// application, which is the whole reason the event exists.
+  static Future<bool> _applyDrop(AlarmDropped event) async {
+    await AlarmStorage.unsaveAlarm(event.id);
+    PlatformTimers.stopAlarm(event.id);
+
+    _scheduled.add(_scheduled.value.removeById(event.id));
+    _ringing.add(_ringing.value.removeById(event.id));
+
+    _events.add(event);
+    updateStream.add(event.id);
+
+    _log.info('Alarm ${event.id} was dropped by the host '
+        '(${event.cause.name}); it should have rung at '
+        '${event.scheduledFor}.');
+    return true;
+  }
+
+  /// Moves an alarm to its new time in Dart's own state, and reports it.
+  ///
+  /// Idempotent: applying a move already applied changes nothing and emits
+  /// nothing.
+  static Future<bool> _applyMove(AlarmMoved event) async {
+    final alarmId = event.id;
+    final nextRingAt = event.nextRingAt;
+
     final alarm = await getAlarm(alarmId);
     if (alarm == null) {
-      _log.severe('Alarm $alarmId was snoozed but is not in storage, so the '
+      _log.severe('Alarm $alarmId was moved but is not in storage, so the '
           'deferral cannot be applied. The alarm will not ring again.');
       return false;
     }
@@ -484,7 +543,7 @@ class Alarm {
     // A marker whose time has already passed would rewrite the alarm to a past
     // time, which checkAlarm then deletes. Refuse rather than destroy it.
     if (!nextRingAt.isAfter(DateTime.now())) {
-      _log.warning('Ignoring snooze for $alarmId: $nextRingAt is not in the '
+      _log.warning('Ignoring move for $alarmId: $nextRingAt is not in the '
           'future.');
       return false;
     }
@@ -516,7 +575,12 @@ class Alarm {
 
     // Only a deferral that actually moved the alarm is an event.
     if (isNewDeferral) {
-      _snoozed.add((id: alarmId, nextRingAt: nextRingAt));
+      _events.add(event);
+      // Kept for the snooze case so existing listeners are unaffected by the
+      // arrival of the broader [events] stream.
+      if (event.cause == AlarmEventCause.snooze) {
+        _snoozed.add((id: alarmId, nextRingAt: nextRingAt));
+      }
       updateStream.add(alarmId);
     }
     return true;
