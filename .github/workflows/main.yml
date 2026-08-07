@@ -59,3 +59,30 @@ jobs:
         run: |
           flutter pub get
           flutter build apk --debug
+      # After the APK build, which is what runs `flutter pub get` and generates
+      # the Gradle wiring the :alarm module needs to resolve.
+      - name: Run Android unit tests
+        working-directory: example/android
+        run: ./gradlew :alarm:test
+      # A test task with no sources is NO-SOURCE, which is a *pass*. So the exit
+      # code alone cannot tell "17 tests green" from "the source set stopped
+      # being picked up" -- read the results and require that tests actually ran.
+      # Sound here because the checkout is clean, so no earlier run's results
+      # can stand in for this one's.
+      - name: Check the Android unit tests actually ran
+        run: |
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          files = glob.glob("example/build/alarm/test-results/**/TEST-*.xml", recursive=True)
+          total = sum(int(ET.parse(f).getroot().get("tests", 0)) for f in files)
+          print(f"{len(files)} suites, {total} tests")
+          if total == 0:
+              sys.exit("No Android unit tests ran; the test source set is not being picked up.")
+          PY
+      - name: Upload Android test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report
+          path: example/build/alarm/reports/tests/
+          if-no-files-found: ignore
