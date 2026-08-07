@@ -61,13 +61,27 @@ android {
     }
 
     testOptions {
-        unitTests {
-            // The plugin logs through io.flutter.Log, which delegates to
-            // android.util.Log. Without this, every logging call in the code
-            // under test throws "not mocked" instead of doing nothing, which
-            // would force Robolectric on tests that otherwise need no Android
-            // framework at all.
-            returnDefaultValues = true
+        // The plugin logs through io.flutter.Log, which delegates to
+        // android.util.Log. Without this, every logging call in the code under
+        // test throws "not mocked" instead of doing nothing, which would force
+        // Robolectric on tests that otherwise need no Android framework at all.
+        unitTests.returnDefaultValues = true
+
+        unitTests.all { test ->
+            test.testLogging { exceptionFormat = 'full' }
+            test.afterSuite { descriptor, result ->
+                // Only the synthetic root suite has no parent.
+                if (descriptor.parent != null) return
+                logger.lifecycle("${test.name}: ${result.testCount} tests, " +
+                    "${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
+                // A test task that finds nothing still succeeds, so a source set
+                // that silently stops being picked up -- an AGP upgrade, a moved
+                // directory -- would leave CI green while covering nothing.
+                if (result.testCount == 0) {
+                    throw new GradleException("${test.name} ran no tests. The test " +
+                        "source set is not being picked up.")
+                }
+            }
         }
     }
 }
