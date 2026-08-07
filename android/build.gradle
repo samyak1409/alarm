@@ -59,6 +59,17 @@ android {
             consumerProguardFiles 'proguard-rules.pro'
         }
     }
+
+    testOptions {
+        unitTests {
+            // The plugin logs through io.flutter.Log, which delegates to
+            // android.util.Log. Without this, every logging call in the code
+            // under test throws "not mocked" instead of doing nothing, which
+            // would force Robolectric on tests that otherwise need no Android
+            // framework at all.
+            returnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
@@ -70,4 +81,9 @@ dependencies {
     // instead of relying on it transitively.
     implementation 'androidx.core:core:1.13.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
+
+    // Unit tests run on the JVM, so they never reach a device or an emulator.
+    // testImplementation is not visible to consumers, and is only resolved when
+    // this module's own tests are compiled.
+    testImplementation 'junit:junit:4.13.2'
 }

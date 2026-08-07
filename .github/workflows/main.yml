@@ -59,3 +59,15 @@ jobs:
         run: |
           flutter pub get
           flutter build apk --debug
+      # After the APK build, which is what runs `flutter pub get` and generates
+      # the Gradle wiring the :alarm module needs to resolve.
+      - name: Run Android unit tests
+        working-directory: example/android
+        run: ./gradlew :alarm:test
+      - name: Upload Android test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report
+          path: example/build/alarm/reports/tests/
+          if-no-files-found: ignore

@@ -23,7 +23,17 @@ const val SHARED_PREFERENCES_NAME = "AlarmSharedPreferences"
 private val Context.dataStore: DataStore<Preferences> by
 preferencesDataStore(SHARED_PREFERENCES_NAME)
 
-class AlarmStorage(context: Context) {
+/**
+ * Durable storage for alarms and for the events the host records about them.
+ *
+ * Takes the `DataStore` rather than building it, so unit tests can hand it one
+ * over a temporary file and exercise the marker rules — the migration, the TTLs,
+ * the acknowledgement match, the verb-aware clearing — without a device.
+ */
+class AlarmStorage internal constructor(private val dataStore: DataStore<Preferences>) {
+    /** Production entry point: one process-wide store, keyed off the context. */
+    constructor(context: Context) : this(context.dataStore)
+
     companion object {
         private const val TAG = "AlarmStorage"
         private const val PREFIX = "__alarm_id__"
@@ -42,8 +52,6 @@ class AlarmStorage(context: Context) {
         private const val WARNING_TITLE_KEY = "notificationOnAppKillTitle"
         private const val WARNING_BODY_KEY = "notificationOnAppKillBody"
     }
-
-    private val dataStore = context.dataStore
 
     fun saveAlarm(alarmSettings: AlarmSettings) {
         return runBlocking {
