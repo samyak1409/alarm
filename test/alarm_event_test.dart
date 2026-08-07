@@ -149,6 +149,52 @@ void main() {
       expect(seen, hasLength(1));
     });
 
+    test('is still reported when a previous run died before reporting it',
+        () async {
+      // Removing the alarm is durable and completes before the report, so a
+      // process death in between leaves the marker with the alarm already gone.
+      // Suppressing on "the alarm is missing" would swallow the only notice the
+      // application ever gets — silence here is unrecoverable, a duplicate is
+      // not, which is why this replays rather than dedups across runs.
+      final scheduledFor = DateTime.now().subtract(const Duration(hours: 2));
+      // Deliberately no saveAlarm: the run that died already removed it.
+      host.pending.add(droppedEvent(42, scheduledFor));
+
+      final seen = <AlarmEvent>[];
+      final subscription = Alarm.events.listen(seen.add);
+      addTearDown(subscription.cancel);
+
+      await Alarm.init();
+      await pump();
+
+      expect(seen, hasLength(1));
+      expect(seen.single.id, 42);
+    });
+
+    test('a drain larger than a small buffer still reaches a late listener',
+        () async {
+      // One marker per alarm, and Android allows up to 500 alarms, so a drain
+      // can be far bigger than a conservatively sized replay buffer. A late
+      // listener silently missing the oldest events would break the buffering
+      // guarantee exactly when an app has the most to be told about.
+      const count = 100;
+      final scheduledFor = DateTime.now().subtract(const Duration(hours: 2));
+      for (var i = 0; i < count; i++) {
+        await AlarmStorage.saveAlarm(buildAlarm(1000 + i, scheduledFor));
+        host.pending.add(droppedEvent(1000 + i, scheduledFor));
+      }
+
+      await Alarm.init();
+
+      final seen = <AlarmEvent>[];
+      final subscription = Alarm.events.listen(seen.add);
+      addTearDown(subscription.cancel);
+      await pump();
+
+      expect(seen, hasLength(count));
+      expect(await Alarm.getAlarms(), isEmpty);
+    });
+
     test('applies when the host reports it live', () async {
       // Deliberately an alarm that is still in the future: a past-due one is
       // removed by the reconcile loop during init, so a drop arriving

@@ -39,11 +39,21 @@ class Alarm {
 
   /// How many events a listener that subscribes late still receives.
   ///
-  /// Only has to cover one drain: the host holds one marker per alarm, so a
-  /// single [init] can emit at most one event per stored alarm.
-  static const _eventReplayBufferSize = 64;
+  /// Has to cover one whole drain, or "subscribing after [init] is safe" is
+  /// only true for small alarm sets. The host holds one marker per alarm, so a
+  /// single [init] can emit one event per stored alarm, and Android caps an app
+  /// at 500 scheduled alarms — see `AlarmScheduler`, where exceeding it is the
+  /// reachable arming failure. Sized above that cap so a drain cannot overflow
+  /// it and silently drop the oldest events.
+  static const _eventReplayBufferSize = 512;
 
   static ReplaySubject<AlarmEvent> _events = _newEventSubject();
+
+  /// Drops already reported in this isolate, keyed by `(id, recordedAt)`.
+  ///
+  /// Only ever grows by one per distinct drop a single run sees, which is
+  /// bounded by the alarms that existed when it started.
+  static final Set<(int, int)> _reportedDrops = <(int, int)>{};
 
   static ReplaySubject<AlarmEvent> _newEventSubject() =>
       ReplaySubject<AlarmEvent>(maxSize: _eventReplayBufferSize);
@@ -290,6 +300,7 @@ class Alarm {
     // listener, so without this the events of one test are delivered to the
     // next one's listener.
     _events = _newEventSubject();
+    _reportedDrops.clear();
     PlatformTimers.stopAll();
   }
 
@@ -548,27 +559,29 @@ class Alarm {
   /// so this only brings Dart's own store and streams into line and tells the
   /// application, which is the whole reason the event exists.
   static Future<bool> _applyDrop(AlarmDropped event) async {
-    // Only news the first time. The host keeps its marker until Dart
-    // acknowledges, so a process death between reporting and acknowledging
-    // replays this — as does the live callback racing the drain. Emitting again
-    // would have the application tell its user twice about one missed alarm.
+    // Suppresses only the repeats this isolate can be certain of: the live
+    // callback racing the drain, or two drains in one run.
     //
-    // Deciding on whether the alarm is still there rather than on a
-    // remembered id is what makes this survive a restart: once the drop has
-    // been applied, Dart's own store no longer holds the alarm, and that
-    // outlives the isolate.
-    final alarms = await getAlarms();
-    if (!alarms.any((alarm) => alarm.id == event.id)) {
-      _log.info('Alarm ${event.id} was already dropped; not reporting it '
-          'again.');
-      return true;
-    }
+    // A replay from a *different* run is deliberately reported again. Removing
+    // the alarm is durable and completes before the report, so a process death
+    // in between leaves the marker with the alarm already gone — and treating
+    // "the alarm is missing" as proof it was reported would swallow the only
+    // notice the application ever gets. A duplicate is covered by the
+    // documented `(id, recordedAt)` key; silence is not recoverable.
+    final key = (event.id, event.recordedAt.millisecondsSinceEpoch);
+    final alreadyReported = !_reportedDrops.add(key);
 
     await AlarmStorage.unsaveAlarm(event.id);
     PlatformTimers.stopAlarm(event.id);
 
     _scheduled.add(_scheduled.value.removeById(event.id));
     _ringing.add(_ringing.value.removeById(event.id));
+
+    if (alreadyReported) {
+      _log.info('Alarm ${event.id} was already reported as dropped in this '
+          'session; not reporting it again.');
+      return true;
+    }
 
     _events.add(event);
     updateStream.add(event.id);
