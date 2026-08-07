@@ -16,9 +16,14 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.Build
 import androidx.core.app.ServiceCompat
+import com.gdelataillade.alarm.models.AlarmEventCause
+import com.gdelataillade.alarm.models.AlarmEventVerb
 import com.gdelataillade.alarm.models.AlarmSettings
+import com.gdelataillade.alarm.models.HostAlarmEvent
 import com.gdelataillade.alarm.models.NotificationSettings
 import com.gdelataillade.alarm.services.AlarmRingingLiveData
+import com.gdelataillade.alarm.services.AlarmScheduler
+import java.util.Date
 import com.gdelataillade.alarm.services.NotificationHandler
 import com.gdelataillade.alarm.services.WarningNotificationState
 import com.gdelataillade.alarm.services.SnoozeCoordinator
@@ -32,6 +37,22 @@ class AlarmService : Service() {
         // Arbitrary non-zero id used when the service must enter the
         // foreground without a real alarm notification to show.
         private const val PLACEHOLDER_NOTIFICATION_ID = 973_422
+
+        /**
+         * How far out to re-arm a ring the platform refused to let us start.
+         *
+         * Android 15 forbids starting a `mediaPlayback` foreground service from
+         * `BOOT_COMPLETED`, and the restriction follows the attribution: while
+         * the boot allowlist is open — 20s from when `BootReceiver` runs — every
+         * foreground service start by the app inherits it, including one an
+         * ordinary `AlarmManager` delivery triggered. Waiting the window out and
+         * letting `AlarmManager` deliver again gets the start attributed to the
+         * exact-alarm exemption instead, which is allowed.
+         *
+         * 30s rather than 20s so a slow boot cannot land the retry back inside
+         * the window it is trying to escape.
+         */
+        private const val RING_RETRY_DELAY_MILLIS = 30_000L
 
         /**
          * Action an application declares on the activity that should present a
@@ -170,7 +191,11 @@ class AlarmService : Service() {
                 try {
                     startAlarmService(id, notification)
                 } catch (e: ForegroundServiceStartNotAllowedException) {
-                    Log.e(TAG, "Foreground service start not allowed", e)
+                    // Returning here is what made the alarm vanish in silence:
+                    // the service stays up, never foregrounded, with no
+                    // notification and no audio, and nothing tells Dart.
+                    Log.e(TAG, "Foreground service start not allowed; deferring the ring", e)
+                    deferRefusedRing(id, alarmSettings)
                     return
                 }
             } else {
@@ -383,6 +408,130 @@ class AlarmService : Service() {
     fun handleStopAlarmCommand(alarmId: Int) {
         if (alarmId == 0) return
         unsaveAlarm(alarmId)
+    }
+
+    /**
+     * Re-arms [alarmSettings] shortly in the future after the platform refused to
+     * let this ring enter the foreground.
+     *
+     * The refusal is not the alarm's fault and not recoverable in the moment, so
+     * the only honest options are to lose the alarm or to ring it late. Late is
+     * better: an alarm that sounds 30 seconds after a reboot is a far smaller
+     * failure than one that never sounds at all.
+     *
+     * Goes through [AlarmScheduler] so the shifted time is persisted as well as
+     * armed. That matters because Dart's reconciliation stops any alarm it finds
+     * past due, so a retry armed without moving the stored time would be
+     * cancelled by the next `Alarm.init()`.
+     */
+    private fun deferRefusedRing(alarmId: Int, alarmSettings: AlarmSettings) {
+        val storage = AlarmStorage(this)
+
+        // One retry is enough by construction: the boot allowlist lasts about
+        // 20s from when `BootReceiver` runs and the retry is armed 30s out, so
+        // it lands outside the window. A second refusal means the boot window
+        // was never the cause, and deferring again would postpone the same
+        // failure forever — 30s at a time, with the user hearing nothing.
+        //
+        // The check has to be durable rather than a counter on this class. By
+        // the time the retry fires, 30s later, this process holds no foreground
+        // service — the refused one stopped itself — so it is an ordinary
+        // background process the system may reclaim at any moment, and boot is
+        // when it is most likely to. In-memory state would then reset between a
+        // refusal and its own retry and never reach the limit. The marker the
+        // first deferral wrote is what survives that.
+        val alreadyDeferred = storage.getPendingAlarmEvents().any {
+            it.alarmId == alarmId &&
+                it.verb == AlarmEventVerb.MOVED &&
+                it.cause == AlarmEventCause.PLATFORM_REFUSAL
+        }
+        if (alreadyDeferred) {
+            dropRefusedRing(alarmId, alarmSettings, storage)
+            return
+        }
+
+        val recordedAt = System.currentTimeMillis()
+        val retryAt = recordedAt + RING_RETRY_DELAY_MILLIS
+        val deferred = alarmSettings.copy(dateTime = Date(retryAt))
+        val event = HostAlarmEvent(
+            alarmId = alarmId,
+            verb = AlarmEventVerb.MOVED,
+            cause = AlarmEventCause.PLATFORM_REFUSAL,
+            atMillis = retryAt,
+            recordedAtMillis = recordedAt,
+        )
+
+        // Recorded before arming, the same ordering SnoozeCoordinator uses: a
+        // crash in between still leaves Dart able to learn the alarm moved, and
+        // without that its reconciliation stops the alarm and cancels the retry.
+        storage.saveAlarmEvent(event)
+
+        if (!AlarmScheduler.schedule(this, deferred, requireDurable = true)) {
+            // The marker now describes a retry that is not armed.
+            storage.clearAlarmEvent(alarmId)
+            Log.e(TAG, "Could not re-arm the refused ring for $alarmId.")
+            dropRefusedRing(alarmId, alarmSettings, storage)
+            return
+        }
+
+        Log.d(TAG, "Ring for $alarmId deferred to $retryAt after a refused foreground start.")
+        reportHostEvent(event, storage)
+
+        // Nothing is ringing, so leave no service behind holding a foreground
+        // obligation it was never allowed to meet.
+        stopSelfIfIdle()
+    }
+
+    /**
+     * Gives up on a ring the platform will not allow, and says so.
+     *
+     * Reached when a retry is refused too, which means waiting out the boot
+     * window was not the answer. The alarm cannot ring and nothing here can make
+     * it, so the choice is between losing it silently and losing it visibly.
+     * Recording a drop is what lets the application tell its user that an alarm
+     * they set did not go off — the plugin deliberately says nothing itself.
+     */
+    private fun dropRefusedRing(
+        alarmId: Int,
+        alarmSettings: AlarmSettings,
+        storage: AlarmStorage,
+    ) {
+        val event = HostAlarmEvent(
+            alarmId = alarmId,
+            verb = AlarmEventVerb.DROPPED,
+            cause = AlarmEventCause.PLATFORM_REFUSAL,
+            atMillis = alarmSettings.dateTime.time,
+            recordedAtMillis = System.currentTimeMillis(),
+        )
+
+        // Order is free here: unsaveAlarm deliberately keeps DROPPED markers, so
+        // the record survives the removal it describes.
+        storage.saveAlarmEvent(event)
+        storage.unsaveAlarm(alarmId)
+
+        Log.e(
+            TAG,
+            "Ring for $alarmId was refused again; dropping the alarm and reporting it."
+        )
+        reportHostEvent(event, storage)
+        stopSelfIfIdle()
+    }
+
+    /**
+     * Tells Dart about [event] if an engine happens to be attached.
+     *
+     * Usually there is none — these refusals happen at boot — so the durable
+     * marker is the real delivery path and this is only an optimisation. The
+     * marker is dropped only once Dart confirms it applied the event.
+     */
+    private fun reportHostEvent(event: HostAlarmEvent, storage: AlarmStorage) {
+        AlarmPlugin.alarmTriggerApi?.alarmEvent(event.toWire()) { result ->
+            if (result.isSuccess) {
+                storage.acknowledgeAlarmEvent(event.alarmId, event.recordedAtMillis)
+            } else {
+                Log.d(TAG, "Dart did not apply the event for ${event.alarmId}; keeping the marker.")
+            }
+        }
     }
 
     /**
