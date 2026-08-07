@@ -3,7 +3,10 @@ package com.gdelataillade.alarm.services
 import android.content.Context
 import com.gdelataillade.alarm.alarm.AlarmPlugin
 import com.gdelataillade.alarm.alarm.AlarmService
+import com.gdelataillade.alarm.models.AlarmEventCause
+import com.gdelataillade.alarm.models.AlarmEventVerb
 import com.gdelataillade.alarm.models.AlarmSettings
+import com.gdelataillade.alarm.models.HostAlarmEvent
 import io.flutter.Log
 import java.util.Date
 
@@ -54,13 +57,21 @@ object SnoozeCoordinator {
             return false
         }
 
-        val nextRingAt = System.currentTimeMillis() + durationMillis
+        val recordedAt = System.currentTimeMillis()
+        val nextRingAt = recordedAt + durationMillis
         val deferred = settings.copy(dateTime = Date(nextRingAt))
+        val event = HostAlarmEvent(
+            alarmId = alarmId,
+            verb = AlarmEventVerb.MOVED,
+            cause = AlarmEventCause.SNOOZE,
+            atMillis = nextRingAt,
+            recordedAtMillis = recordedAt,
+        )
 
         // Written before scheduling so a crash mid-way still leaves Dart able to
         // learn the alarm moved. Without it, Dart's own store keeps the original
         // past time and its next reconciliation pass would stop the alarm.
-        storage.saveSnooze(alarmId, nextRingAt)
+        storage.saveAlarmEvent(event)
 
         val scheduled = AlarmScheduler.schedule(context, deferred, requireDurable = true)
         if (!scheduled) {
@@ -69,7 +80,7 @@ object SnoozeCoordinator {
             // deferred time, and the marker now describes a snooze that is not
             // actually armed.
             storage.saveAlarm(settings)
-            storage.clearSnooze(alarmId)
+            storage.clearAlarmEvent(alarmId)
             return false
         }
 
@@ -83,12 +94,12 @@ object SnoozeCoordinator {
             NotificationHandler(context).cancelNotification(alarmId)
         }
 
-        AlarmPlugin.alarmTriggerApi?.alarmSnoozed(alarmId.toLong(), nextRingAt) { result ->
+        AlarmPlugin.alarmTriggerApi?.alarmEvent(event.toWire()) { result ->
             if (result.isSuccess) {
                 // Dart has durably applied it, so the marker has done its job.
-                // Matching on the timestamp means this cannot drop a newer
-                // snooze taken for the same alarm in the meantime.
-                storage.acknowledgeSnooze(alarmId, nextRingAt)
+                // Matching on the recorded time means this cannot drop a newer
+                // event recorded for the same alarm in the meantime.
+                storage.acknowledgeAlarmEvent(alarmId, recordedAt)
             } else {
                 Log.d(TAG, "Dart did not apply the snooze for $alarmId; keeping the marker.")
             }

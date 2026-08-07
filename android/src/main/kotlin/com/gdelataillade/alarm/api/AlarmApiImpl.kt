@@ -2,9 +2,9 @@ package com.gdelataillade.alarm.api
 
 import com.gdelataillade.alarm.generated.AlarmApi
 import com.gdelataillade.alarm.generated.AlarmErrorCode
+import com.gdelataillade.alarm.generated.AlarmEventWire
 import com.gdelataillade.alarm.generated.AlarmSettingsWire
 import com.gdelataillade.alarm.generated.FlutterError
-import com.gdelataillade.alarm.generated.PendingSnoozeWire
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
@@ -138,23 +138,17 @@ class AlarmApiImpl(private val context: Context) : AlarmApi {
         WarningNotificationState.disable(context)
     }
 
-    override fun getPendingSnoozes(callback: (Result<List<PendingSnoozeWire>>) -> Unit) {
-        val snoozes = AlarmStorage(context).getPendingSnoozes()
-        callback(
-            Result.success(
-                snoozes.map { (id, nextRingAt) ->
-                    PendingSnoozeWire(id.toLong(), nextRingAt)
-                }
-            )
-        )
+    override fun getPendingAlarmEvents(callback: (Result<List<AlarmEventWire>>) -> Unit) {
+        val events = AlarmStorage(context).getPendingAlarmEvents()
+        callback(Result.success(events.map { it.toWire() }))
     }
 
-    override fun acknowledgeSnooze(
+    override fun acknowledgeAlarmEvent(
         alarmId: Long,
-        nextRingAtMillis: Long,
+        recordedAtMillis: Long,
         callback: (Result<Unit>) -> Unit,
     ) {
-        AlarmStorage(context).acknowledgeSnooze(alarmId.toInt(), nextRingAtMillis)
+        AlarmStorage(context).acknowledgeAlarmEvent(alarmId.toInt(), recordedAtMillis)
         callback(Result.success(Unit))
     }
 
