@@ -129,12 +129,14 @@ enum class AlarmEventCauseWire(val raw: Int) {
   /** The user deferred the alarm from the notification or the ring screen. */
   SNOOZE(0),
   /**
-   * The platform refused to let the ring start, so it was re-armed later.
+   * The platform refused to let the ring start.
    *
    * Android forbids starting a `mediaPlayback` foreground service from
    * `BOOT_COMPLETED`, and the refusal follows the attribution rather than the
    * caller, so an ordinary alarm delivered inside the boot window is refused
-   * too. Ringing late beats not ringing.
+   * too. The alarm is normally re-armed just past that window, because ringing
+   * late beats not ringing; it is only dropped when the retry is refused as
+   * well, which means the boot window was not the cause.
    */
   PLATFORM_REFUSAL(1),
   /**

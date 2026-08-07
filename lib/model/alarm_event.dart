@@ -6,12 +6,15 @@ enum AlarmEventCause {
   /// The user deferred the alarm from the notification or the ring screen.
   snooze,
 
-  /// The platform refused to let the ring start, so it was re-armed later.
+  /// The platform refused to let the ring start.
   ///
   /// Android forbids starting a media playback foreground service from
   /// `BOOT_COMPLETED`, and the refusal follows the attribution rather than the
   /// caller, so an ordinary alarm delivered inside the boot window is refused
-  /// too. Ringing late beats not ringing.
+  /// too. Paired with [AlarmMoved] the alarm was re-armed just past that
+  /// window, because ringing late beats not ringing. Paired with [AlarmDropped]
+  /// the retry was refused as well, which means the boot window was not the
+  /// cause and waiting longer would not have helped.
   platformRefusal,
 
   /// The alarm's time had already passed while the device was off, so it was
