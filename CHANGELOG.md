@@ -1,3 +1,8 @@
+## 5.10.0
+* [Android] Fixed an alarm due within roughly 45 seconds of a reboot never ringing. Android forbids starting a media playback foreground service from `BOOT_COMPLETED`, and the refusal follows the attribution rather than the caller, so an ordinary alarm delivered inside the boot window was refused too and vanished with no notification, no sound and nothing reported. Such a ring is now retried just past that window; if the retry is refused as well the alarm is dropped and reported rather than lost in silence.
+* Added `Alarm.events`, a stream of changes the host made to an alarm on its own: deferrals the platform forced, and alarms it discarded. Buffered, so subscribing after `Alarm.init()` still receives what was drained during it. Delivered at least once — key any irreversible reaction on `(id, recordedAt)`.
+* **`Alarm.snoozed` is now buffered**, and is a view over `Alarm.events`. A deferral taken with no Flutter engine running is applied during `Alarm.init()`, and previously reached only listeners that already existed — which the documented `await Alarm.init()` in `main` made unlikely. Existing listeners are unaffected; deferrals that used to be dropped now arrive.
+
 ## 5.9.0
 * [Android] Fixed `Alarm.init()` cancelling an alarm that was due but had not started ringing yet, which silently lost the alarm. Past-due alarms are now left alone for 30 seconds before being stopped.
 * [Android] A failed alarm arm is now reported to Flutter as an error instead of success, and no longer leaves an alarm stored that the platform never armed. **`Alarm.set()` now throws `AlarmException` where it previously returned `true`.** A failed re-arm after a reboot keeps the alarm stored instead, so a later `Alarm.init()` can retry it.
