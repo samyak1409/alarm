@@ -106,6 +106,33 @@ void main() {
       expect(Alarm.ringing.value.containsId(7), isFalse);
     });
 
+    test('reaches a listener that subscribes after init', () async {
+      // The setup the README recommends is `await Alarm.init()` in main, so the
+      // realistic listener attaches afterwards. Before Alarm.snoozed became a
+      // view over the buffered events stream, a deferral replayed during init
+      // reached only listeners that already existed — which that ordering made
+      // unlikely.
+      final nextRingAt = DateTime.now().add(const Duration(minutes: 5));
+      await AlarmStorage.saveAlarm(
+        buildAlarm(21, DateTime.now().subtract(const Duration(minutes: 1))),
+      );
+      host.pending.add(snoozeEvent(21, nextRingAt));
+
+      await Alarm.init();
+
+      final seen = <({int id, DateTime nextRingAt})>[];
+      final subscription = Alarm.snoozed.listen(seen.add);
+      addTearDown(subscription.cancel);
+      await pump();
+
+      expect(seen, hasLength(1));
+      expect(seen.single.id, 21);
+      expect(
+        seen.single.nextRingAt.millisecondsSinceEpoch,
+        nextRingAt.millisecondsSinceEpoch,
+      );
+    });
+
     test('acknowledges the marker it applied, matching id and timestamp',
         () async {
       final nextRingAt = DateTime.now().add(const Duration(minutes: 5));

@@ -37,9 +37,6 @@ class Alarm {
 
   static final _ringing = BehaviorSubject<AlarmSet>.seeded(AlarmSet.empty());
 
-  static final _snoozed =
-      StreamController<({int id, DateTime nextRingAt})>.broadcast();
-
   /// How many events a listener that subscribes late still receives.
   ///
   /// Only has to cover one drain: the host holds one marker per alarm, so a
@@ -67,7 +64,19 @@ class Alarm {
   /// Only covers user snoozes. [events] reports every change the host makes to
   /// an alarm on its own, including deferrals the platform forced and alarms
   /// discarded as stale, and is the stream to prefer for new code.
-  static Stream<({int id, DateTime nextRingAt})> get snoozed => _snoozed.stream;
+  ///
+  /// A view over [events] rather than a stream of its own, so the two can never
+  /// disagree about a deferral, and so this inherits the buffering described
+  /// there: subscribing after [init] still delivers a snooze replayed during
+  /// it. Before that it was a plain broadcast stream, and a deferral taken with
+  /// no engine running reached only listeners that already existed — which the
+  /// documented `await Alarm.init()` in `main` made unlikely.
+  static Stream<({int id, DateTime nextRingAt})> get snoozed => _events.stream
+      .where(
+        (event) => event is AlarmMoved && event.cause == AlarmEventCause.snooze,
+      )
+      .cast<AlarmMoved>()
+      .map((event) => (id: event.id, nextRingAt: event.nextRingAt));
 
   /// Stream of changes the host made to alarms without the app asking.
   ///
@@ -618,14 +627,10 @@ class Alarm {
         _scheduled.value.removeById(alarmId).add(snoozedAlarm);
     if (nextScheduled != _scheduled.value) _scheduled.add(nextScheduled);
 
-    // Only a deferral that actually moved the alarm is an event.
+    // Only a deferral that actually moved the alarm is an event. [snoozed] is a
+    // view over this, so it needs nothing of its own.
     if (isNewDeferral) {
       _events.add(event);
-      // Kept for the snooze case so existing listeners are unaffected by the
-      // arrival of the broader [events] stream.
-      if (event.cause == AlarmEventCause.snooze) {
-        _snoozed.add((id: alarmId, nextRingAt: nextRingAt));
-      }
       updateStream.add(alarmId);
     }
     return true;

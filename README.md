@@ -387,12 +387,10 @@ record is kept until Dart confirms it stored the new time, so a crash in
 between loses nothing, and applying the same deferral twice does nothing the
 second time.
 
-> **Subscribe to `Alarm.snoozed` before calling `Alarm.init()`** if you want
-> those replayed deferrals. It is a plain broadcast stream with no buffering, so
-> a deferral replayed during `init()` is delivered only to listeners that
-> already exist. `Alarm.scheduled` has no such constraint — it replays its
-> latest value to new listeners — so an app that only needs the alarm's new time
-> can read it there instead.
+`Alarm.snoozed` is buffered, so subscribing after `Alarm.init()` — the order the
+setup above recommends — still delivers a deferral replayed during it. A
+listener that subscribes later receives it too, so key any irreversible reaction
+on the alarm id and the deferral time rather than assuming one delivery.
 
 Snoozing an alarm that is not currently scheduled, or whose snooze time has
 already passed, is refused rather than applied — a deferral is never allowed to
