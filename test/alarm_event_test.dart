@@ -7,6 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/fake_host.dart';
 
+/// Lets already-queued stream deliveries run.
+Future<void> pump() => Future<void>.delayed(Duration.zero);
+
 /// The host event mechanism, beyond the snooze case that already exercises it.
 ///
 /// `moved` is covered in depth by the snooze suite, since a snooze *is* a move.
@@ -102,8 +105,56 @@ void main() {
       expect(snoozes, isEmpty);
     });
 
-    test('applies when the host reports it live', () async {
+    test('reaches a listener that subscribes after init', () async {
+      // The README tells applications to `await Alarm.init()` in main, so the
+      // realistic listener attaches afterwards — and a stale-at-boot drop is
+      // only ever discovered during that drain, because the alarm was discarded
+      // at boot with no engine to call. An unbuffered stream would deliver this
+      // to nobody, which is the one case the event exists for.
       final scheduledFor = DateTime.now().subtract(const Duration(hours: 2));
+      await AlarmStorage.saveAlarm(buildAlarm(42, scheduledFor));
+      host.pending.add(droppedEvent(42, scheduledFor));
+
+      await Alarm.init();
+
+      final seen = <AlarmEvent>[];
+      final subscription = Alarm.events.listen(seen.add);
+      addTearDown(subscription.cancel);
+      await pump();
+
+      expect(seen, hasLength(1));
+      expect(seen.single, isA<AlarmDropped>());
+      expect(seen.single.id, 42);
+    });
+
+    test('is not reported twice when its marker is replayed', () async {
+      // The host keeps the marker until Dart acknowledges it, so a process
+      // death between reporting and acknowledging replays the event on the next
+      // drain. Reporting it again would have the app tell its user twice about
+      // one missed alarm.
+      final scheduledFor = DateTime.now().subtract(const Duration(hours: 2));
+      await AlarmStorage.saveAlarm(buildAlarm(42, scheduledFor));
+      host.pending.add(droppedEvent(42, scheduledFor));
+
+      final seen = <AlarmEvent>[];
+      final subscription = Alarm.events.listen(seen.add);
+      addTearDown(subscription.cancel);
+
+      await Alarm.init();
+      // The fake host still offers the same marker, which is exactly what a
+      // host that never saw the acknowledgement would do.
+      await Alarm.checkAlarm();
+      await pump();
+
+      expect(seen, hasLength(1));
+    });
+
+    test('applies when the host reports it live', () async {
+      // Deliberately an alarm that is still in the future: a past-due one is
+      // removed by the reconcile loop during init, so a drop arriving
+      // afterwards would find nothing left and be suppressed as a repeat. That
+      // suppression is correct, but it would make this test assert nothing.
+      final scheduledFor = DateTime.now().add(const Duration(hours: 1));
       await AlarmStorage.saveAlarm(buildAlarm(7, scheduledFor));
       await Alarm.init();
 
@@ -112,6 +163,9 @@ void main() {
       addTearDown(subscription.cancel);
 
       await hostReportsEvent(droppedEvent(7, scheduledFor));
+      // Stream delivery is asynchronous, so assert only once it has run rather
+      // than relying on the awaits inside the drop having pumped enough turns.
+      await pump();
 
       expect(await Alarm.getAlarm(7), isNull);
       expect(seen.single, isA<AlarmDropped>());

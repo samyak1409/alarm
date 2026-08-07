@@ -40,7 +40,16 @@ class Alarm {
   static final _snoozed =
       StreamController<({int id, DateTime nextRingAt})>.broadcast();
 
-  static final _events = StreamController<AlarmEvent>.broadcast();
+  /// How many events a listener that subscribes late still receives.
+  ///
+  /// Only has to cover one drain: the host holds one marker per alarm, so a
+  /// single [init] can emit at most one event per stored alarm.
+  static const _eventReplayBufferSize = 64;
+
+  static ReplaySubject<AlarmEvent> _events = _newEventSubject();
+
+  static ReplaySubject<AlarmEvent> _newEventSubject() =>
+      ReplaySubject<AlarmEvent>(maxSize: _eventReplayBufferSize);
 
   /// Stream of the scheduled alarms.
   static ValueStream<AlarmSet> get scheduled => _scheduled.stream;
@@ -65,8 +74,24 @@ class Alarm {
   /// The host takes these decisions where no Flutter engine is running — a
   /// native notification action, a full screen intent, the boot receiver — so
   /// they are recorded durably and drained on the next [init]. An event can
-  /// therefore arrive long after it happened, and the same event never arrives
-  /// twice.
+  /// therefore arrive long after it happened.
+  ///
+  /// **Buffered, so subscribing after [init] is safe.** The documented way to
+  /// start the plugin is `await Alarm.init()` in `main`, which means the
+  /// realistic listener attaches later — and an [AlarmDropped] can *only* be
+  /// discovered during that drain, because the alarm was discarded at boot with
+  /// no engine to call. An unbuffered stream would therefore never deliver the
+  /// case this exists for. Each new listener receives the last
+  /// [_eventReplayBufferSize] events.
+  ///
+  /// **Delivered at least once, not exactly once.** The host keeps its marker
+  /// until Dart acknowledges it, so a process death between applying an event
+  /// and acknowledging it replays that event on the next [init] — losing it
+  /// would be the worse failure. Re-subscribing also replays. The plugin
+  /// suppresses the repeats it can detect, but an application that acts
+  /// irreversibly on an event — posting a notification, writing a log row —
+  /// should key that action on `(id, recordedAt)`, which identifies an event
+  /// uniquely.
   ///
   /// The plugin deliberately shows the user nothing for these. An
   /// [AlarmDropped] in particular is worth surfacing, but only the application
@@ -252,6 +277,10 @@ class Alarm {
     _checkAlarmFuture = null;
     _scheduled.add(AlarmSet.empty());
     _ringing.add(AlarmSet.empty());
+    // Replaced rather than drained: [events] replays its buffer to every new
+    // listener, so without this the events of one test are delivered to the
+    // next one's listener.
+    _events = _newEventSubject();
     PlatformTimers.stopAll();
   }
 
@@ -510,6 +539,22 @@ class Alarm {
   /// so this only brings Dart's own store and streams into line and tells the
   /// application, which is the whole reason the event exists.
   static Future<bool> _applyDrop(AlarmDropped event) async {
+    // Only news the first time. The host keeps its marker until Dart
+    // acknowledges, so a process death between reporting and acknowledging
+    // replays this — as does the live callback racing the drain. Emitting again
+    // would have the application tell its user twice about one missed alarm.
+    //
+    // Deciding on whether the alarm is still there rather than on a
+    // remembered id is what makes this survive a restart: once the drop has
+    // been applied, Dart's own store no longer holds the alarm, and that
+    // outlives the isolate.
+    final alarms = await getAlarms();
+    if (!alarms.any((alarm) => alarm.id == event.id)) {
+      _log.info('Alarm ${event.id} was already dropped; not reporting it '
+          'again.');
+      return true;
+    }
+
     await AlarmStorage.unsaveAlarm(event.id);
     PlatformTimers.stopAlarm(event.id);
 
