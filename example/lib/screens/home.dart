@@ -11,7 +11,7 @@ import 'package:alarm_example/widgets/tile.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const version = '5.9.0';
+const version = '5.10.0';
 
 class ExampleAlarmHomeScreen extends StatefulWidget {
   const ExampleAlarmHomeScreen({super.key});
@@ -39,11 +39,9 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
     updateSubscription = Alarm.scheduled.listen((_) {
       unawaited(loadAlarms());
     });
-    // Android only. This receives snoozes taken while the app is running.
-    // A snooze taken with no engine is replayed during Alarm.init(), which
-    // happens before this widget exists -- see main() for that half. Either
-    // way the alarm list below refreshes, because Alarm.scheduled replays its
-    // latest value to new listeners.
+    // Android only. Receives snoozes taken while the app is running, and also
+    // the ones replayed during Alarm.init() -- the stream is buffered, so
+    // subscribing from a widget built after init still delivers those.
     snoozeSubscription = Alarm.snoozed.listen(snoozed);
     notifications = Notifications();
   }
