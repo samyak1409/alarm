@@ -1,3 +1,7 @@
+## 5.11.0
+* Added `Alarm.acknowledgeEvent()` and `Alarm.init(acknowledgeEventsAutomatically: false)`, which move the durability boundary for `Alarm.events` to the application: the host keeps its marker until the app has finished writing the event down, instead of dropping it as soon as the event is emitted. Under the opt-out an event whose marker outlived a restart is reported again, since the surviving marker is the proof the app never confirmed it. Opt-in, so existing behavior is unchanged. **Manual acknowledgement becomes the only behavior in 6.0.0.**
+* [Android] A host event delivered while an engine is attached is now acknowledged by Dart rather than by the host on reply, so the boundary above covers it too.
+
 ## 5.10.0
 * [Android] Fixed an alarm due within ~45s of a reboot never ringing (#424).
 * Added `Alarm.events`, reporting deferrals and discards the host made on its own.

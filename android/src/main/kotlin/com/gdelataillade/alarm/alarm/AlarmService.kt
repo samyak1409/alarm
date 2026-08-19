@@ -475,7 +475,7 @@ class AlarmService : Service() {
         }
 
         Log.d(TAG, "Ring for $alarmId deferred to $retryAt after a refused foreground start.")
-        reportHostEvent(event, storage)
+        reportHostEvent(event)
 
         // Nothing is ringing, so leave no service behind holding a foreground
         // obligation it was never allowed to meet.
@@ -513,7 +513,7 @@ class AlarmService : Service() {
             TAG,
             "Ring for $alarmId was refused again; dropping the alarm and reporting it."
         )
-        reportHostEvent(event, storage)
+        reportHostEvent(event)
         stopSelfIfIdle()
     }
 
@@ -521,14 +521,18 @@ class AlarmService : Service() {
      * Tells Dart about [event] if an engine happens to be attached.
      *
      * Usually there is none — these refusals happen at boot — so the durable
-     * marker is the real delivery path and this is only an optimisation. The
-     * marker is dropped only once Dart confirms it applied the event.
+     * marker is the real delivery path and this is only an optimisation.
+     *
+     * Deliberately does not drop the marker on a successful reply. This call
+     * returning means Dart *emitted* the event, not that anything has finished
+     * with it, so acknowledging here would delete the durable record while an
+     * application handler is still writing the event down — the same hole the
+     * drain had. Dart acknowledges instead, once whoever owns that boundary
+     * says so; see `Alarm.acknowledgeEvent`.
      */
-    private fun reportHostEvent(event: HostAlarmEvent, storage: AlarmStorage) {
+    private fun reportHostEvent(event: HostAlarmEvent) {
         AlarmPlugin.alarmTriggerApi?.alarmEvent(event.toWire()) { result ->
-            if (result.isSuccess) {
-                storage.acknowledgeAlarmEvent(event.alarmId, event.recordedAtMillis)
-            } else {
+            if (result.isFailure) {
                 Log.d(TAG, "Dart did not apply the event for ${event.alarmId}; keeping the marker.")
             }
         }

@@ -23,6 +23,15 @@ export 'package:alarm/model/alarm_settings.dart';
 export 'package:alarm/model/notification_settings.dart';
 export 'package:alarm/model/volume_settings.dart';
 
+/// What applying one host event did.
+///
+/// `handled` means `checkAlarm` should leave this alarm alone: native storage
+/// and the native alarm are already correct, so rescheduling would cancel and
+/// re-arm for no reason. `reported` means the event reached [Alarm.events], so
+/// an application listener may be part-way through acting on it — which is the
+/// only case where who acknowledges it can matter.
+typedef _EventOutcome = ({bool handled, bool reported});
+
 /// Class that handles the alarm.
 class Alarm {
   /// Whether it's iOS device.
@@ -49,11 +58,54 @@ class Alarm {
 
   static ReplaySubject<AlarmEvent> _events = _newEventSubject();
 
-  /// Drops already reported in this isolate, keyed by `(id, recordedAt)`.
+  /// Whether the plugin acknowledges an event on the application's behalf.
   ///
-  /// Only ever grows by one per distinct drop a single run sees, which is
-  /// bounded by the alarms that existed when it started.
-  static final Set<(int, int)> _reportedDrops = <(int, int)>{};
+  /// Moved only by an [init] that names it. True keeps 5.10.0's behaviour,
+  /// where the host's marker is dropped as soon as the event has been emitted;
+  /// false moves that boundary to [acknowledgeEvent], so the marker outlives a
+  /// process death while the application is still writing the event down.
+  static bool _acknowledgeEventsAutomatically = true;
+
+  /// Events already emitted on [events] in this isolate, keyed by
+  /// `(id, recordedAt)` — the identity the stream documents.
+  ///
+  /// Two jobs, both of which need exactly this set. It suppresses a drop the
+  /// live callback and the drain both deliver, and it is how
+  /// [_acknowledgeUnlessOwned] tells an event the application already has from
+  /// one it will never see: a marker replayed inside a single run must not be
+  /// acknowledged out from under a handler that is still writing down the copy
+  /// it was given the first time.
+  ///
+  /// Held for [_reportedEventRetention]. "One entry per alarm at startup" was
+  /// the bound while this held drops alone — one marker per stored alarm, all
+  /// drained at init — but a live snooze mints a new key every time, so a
+  /// long-running process can emit moves indefinitely.
+  ///
+  /// Swept whenever an event is emitted *and* at the top of every drain, so a
+  /// process that stops seeing events still clears out at its next [init] or
+  /// [checkAlarm] rather than holding its last burst until it exits.
+  static final Set<(int, int)> _reportedEvents = <(int, int)>{};
+
+  /// How long a reported event is remembered.
+  ///
+  /// The host expires a `moved` marker after a week and a `dropped` one after
+  /// 24 h, so past the longest of those no marker can come back and
+  /// remembering it suppresses nothing. Sized a day above the longest so the
+  /// entry always outlives the marker it guards against.
+  static const _reportedEventRetention = Duration(days: 8);
+
+  /// Records that [key] was emitted, sweeping first.
+  static void _rememberReported((int, int) key) {
+    _pruneReportedEvents();
+    _reportedEvents.add(key);
+  }
+
+  /// Drops keys no surviving marker can still carry.
+  static void _pruneReportedEvents() {
+    final cutoff =
+        DateTime.now().subtract(_reportedEventRetention).millisecondsSinceEpoch;
+    _reportedEvents.removeWhere((remembered) => remembered.$2 < cutoff);
+  }
 
   static ReplaySubject<AlarmEvent> _newEventSubject() =>
       ReplaySubject<AlarmEvent>(maxSize: _eventReplayBufferSize);
@@ -111,22 +163,58 @@ class Alarm {
   /// posting a notification, writing a log row — should key that action on
   /// `(id, recordedAt)`, which identifies an event uniquely.
   ///
-  /// **The acknowledgement does not wait for this stream's listeners.** It is
-  /// sent once the event has been *emitted*, and a stream discards whatever
-  /// future a handler returns, so a handler that persists the event is still in
-  /// flight when the host's marker is deleted — and depending on channel
-  /// latency it may not have started. A process death in that window loses the
-  /// event for good: the durable record is gone, and the replay buffer above is
-  /// in memory. It costs least for an [AlarmMoved], where the new time is
-  /// already stored on both sides and only the notice is lost, and most for an
-  /// [AlarmDropped], which is the only evidence the alarm did not ring. Closing
-  /// this means moving the acknowledgement to the application, which is
-  /// tracked in https://github.com/gdelataillade/alarm/issues/429.
+  /// **By default the acknowledgement does not wait for this stream's
+  /// listeners.** It is sent once the event has been *emitted*, and a stream
+  /// discards whatever future a handler returns, so a handler that persists the
+  /// event is still in flight when the host's marker is deleted — and depending
+  /// on channel latency it may not have started. A process death in that window
+  /// loses the event for good: the durable record is gone, and the replay
+  /// buffer above is in memory. It costs least for an [AlarmMoved], where the
+  /// new time is already stored on both sides and only the notice is lost, and
+  /// most for an [AlarmDropped], which is the only evidence the alarm did not
+  /// ring.
+  ///
+  /// **Pass `acknowledgeEventsAutomatically: false` to [init] to close that
+  /// window.** The host then keeps its marker until the application calls
+  /// [acknowledgeEvent], so the boundary sits where the durable work happens
+  /// instead of one statement after the emit. The cost is that an event the
+  /// application never acknowledges is redelivered until the marker expires;
+  /// see [acknowledgeEvent]. This becomes the only behaviour in 6.0.0.
   ///
   /// The plugin deliberately shows the user nothing for these. An
   /// [AlarmDropped] in particular is worth surfacing, but only the application
   /// can do it in its own voice and its own records.
   static Stream<AlarmEvent> get events => _events.stream;
+
+  /// Confirms the application has durably taken responsibility for [event].
+  ///
+  /// Only changes anything under
+  /// `Alarm.init(acknowledgeEventsAutomatically: false)`. Under the default the
+  /// plugin has already acknowledged on the application's behalf, so the call
+  /// still goes to the host and simply finds nothing to drop. Harmless, but not
+  /// free — a listener written for the manual boundary is safe to run either
+  /// way, at the cost of one platform round trip per event.
+  ///
+  /// **Call it after the work that must not be lost, not when the event
+  /// arrives.** The whole point of taking the boundary is that the host's
+  /// marker outlives a process death while the application is still writing
+  /// the event down; acknowledging first gives that up and leaves the default
+  /// behaviour with extra steps.
+  ///
+  /// **An event that is never acknowledged is redelivered on every [init]**
+  /// until the host's marker expires — 24 h for an [AlarmDropped], a week for
+  /// an [AlarmMoved]. That is the cost of the manual boundary, and the reason
+  /// it is opt-in: an application that takes it has to acknowledge every event
+  /// it is given, including ones it decides to ignore. Redelivery is not
+  /// duplication in the harmful sense, since `(id, recordedAt)` identifies an
+  /// event uniquely, but it is work the application has to be ready to skip.
+  ///
+  /// Safe to call more than once for the same event.
+  static Future<void> acknowledgeEvent(AlarmEvent event) =>
+      AlarmApi().acknowledgeAlarmEvent(
+        alarmId: event.id,
+        recordedAtMillis: event.recordedAt.millisecondsSinceEpoch,
+      );
 
   /// Stream of the alarm updates.
   ///
@@ -146,7 +234,33 @@ class Alarm {
   ///
   /// Also calls [checkAlarm] that will reschedule alarms that were set before
   /// app termination.
-  static Future<void> init() async {
+  ///
+  /// Pass `acknowledgeEventsAutomatically: false` to take the durability
+  /// boundary for [events] yourself; see [acknowledgeEvent] for what that
+  /// costs and what it buys. Starts out `true`, preserving 5.10.0's behaviour,
+  /// and becomes `false` in 6.0.0 with the automatic path removed.
+  ///
+  /// **Omitting it leaves the boundary as it is**, rather than restoring the
+  /// default. This is callable more than once — on resume, or from a second
+  /// library path — and a bare call is not an application changing its mind
+  /// about durability, so it must not be able to hand the boundary back and
+  /// start acknowledging events the application still owns. Only an explicit
+  /// value moves it, in either direction.
+  static Future<void> init({bool? acknowledgeEventsAutomatically}) async {
+    // Before anything that can drain: [checkAlarm] below applies pending
+    // events, and it has to already know who owns their acknowledgement.
+    if (acknowledgeEventsAutomatically != null) {
+      if (acknowledgeEventsAutomatically && !_acknowledgeEventsAutomatically) {
+        _log.warning(
+          'Alarm.init(acknowledgeEventsAutomatically: true) is undoing an '
+          'earlier opt-out. Events already delivered but not yet acknowledged '
+          'are acknowledged for the application from now on, so a process '
+          'death while a handler is still writing one down loses it.',
+        );
+      }
+      _acknowledgeEventsAutomatically = acknowledgeEventsAutomatically;
+    }
+
     AlarmTriggerApiImpl.ensureInitialized(
       alarmRang: alarmRang,
       alarmStopped: _alarmStopped,
@@ -311,7 +425,8 @@ class Alarm {
     // listener, so without this the events of one test are delivered to the
     // next one's listener.
     _events = _newEventSubject();
-    _reportedDrops.clear();
+    _reportedEvents.clear();
+    _acknowledgeEventsAutomatically = true;
     PlatformTimers.stopAll();
   }
 
@@ -522,17 +637,24 @@ class Alarm {
       return {};
     }
 
+    _pruneReportedEvents();
+
     final applied = <int>{};
     for (final wire in pending) {
       try {
-        if (await _applyEvent(AlarmEvent.fromWire(wire))) {
-          applied.add(wire.alarmId);
-        }
-        // Acknowledged either way: an applied event is durable, and one that
-        // could not be applied is not going to become applicable later.
-        await AlarmApi().acknowledgeAlarmEvent(
-          alarmId: wire.alarmId,
-          recordedAtMillis: wire.recordedAtMillis,
+        // Read once, before the event is applied, and used for every decision
+        // about it. [init] can land mid-drain and name a new policy, and an
+        // event handed to the application under the manual boundary must not
+        // then be acknowledged for it because the flag moved while a handler
+        // was running. A policy change takes effect from the next event.
+        final acknowledgeAutomatically = _acknowledgeEventsAutomatically;
+        final event = AlarmEvent.fromWire(wire);
+        final outcome = await _applyEvent(event, acknowledgeAutomatically);
+        if (outcome.handled) applied.add(wire.alarmId);
+        await _acknowledgeUnlessOwned(
+          outcome,
+          event,
+          acknowledgeAutomatically,
         );
       } on Object catch (error) {
         _log.warning('Could not apply alarm event ${wire.alarmId}: $error');
@@ -541,9 +663,41 @@ class Alarm {
     return applied;
   }
 
+  /// Acknowledges [event] unless the application has taken that boundary.
+  ///
+  /// An event the application was never given is always acknowledged here,
+  /// whatever the mode. Nobody else can: it never reached [events], so no
+  /// listener knows it exists, and leaving its marker would redeliver it on
+  /// every [init] until it expired. Under the default that covers a deferral
+  /// an earlier run already applied; under either mode it covers one that
+  /// could not be applied at all. Neither becomes applicable later.
+  ///
+  /// An event this isolate *did* hand over is the only case the opt-out
+  /// changes, and it is the case the boundary exists for: the marker is the
+  /// application's last chance to see it again if this process dies while the
+  /// handler is still writing it down. That includes a repeat suppressed by
+  /// [_reportedEvents] — suppressed *because* the application already has it,
+  /// which is exactly why this run must not acknowledge it.
+  static Future<void> _acknowledgeUnlessOwned(
+    _EventOutcome outcome,
+    AlarmEvent event,
+    bool acknowledgeAutomatically,
+  ) async {
+    if (outcome.reported && !acknowledgeAutomatically) return;
+    await acknowledgeEvent(event);
+  }
+
   /// PRIVATE: Called by the native platform when it changed an alarm itself.
+  ///
+  /// Acknowledges under the same rule as the drain. The host used to do this
+  /// itself once this call returned, which put the boundary back where it
+  /// cannot see whether a listener has finished — so the acknowledgement is
+  /// Dart's on both paths now, and this one is the reason the opt-out means
+  /// anything for a live event.
   static Future<void> _alarmEvent(AlarmEvent event) async {
-    await _applyEvent(event);
+    final acknowledgeAutomatically = _acknowledgeEventsAutomatically;
+    final outcome = await _applyEvent(event, acknowledgeAutomatically);
+    await _acknowledgeUnlessOwned(outcome, event, acknowledgeAutomatically);
   }
 
   /// Applies [event] to Dart's own state, and reports it.
@@ -552,13 +706,14 @@ class Alarm {
   /// same result, which matters because which one arrives first depends only on
   /// whether an engine happened to be attached.
   ///
-  /// Returns whether [checkAlarm] should leave this alarm alone: native storage
-  /// and the native alarm are already correct, so rescheduling would cancel and
-  /// re-arm for no reason.
-  static Future<bool> _applyEvent(AlarmEvent event) async {
+  /// See [_EventOutcome] for what the result means.
+  static Future<_EventOutcome> _applyEvent(
+    AlarmEvent event,
+    bool acknowledgeAutomatically,
+  ) async {
     switch (event) {
       case AlarmMoved():
-        return _applyMove(event);
+        return _applyMove(event, acknowledgeAutomatically);
       case AlarmDropped():
         return _applyDrop(event);
     }
@@ -569,7 +724,7 @@ class Alarm {
   /// Nothing is cancelled here: the host dropped it before recording the event,
   /// so this only brings Dart's own store and streams into line and tells the
   /// application, which is the whole reason the event exists.
-  static Future<bool> _applyDrop(AlarmDropped event) async {
+  static Future<_EventOutcome> _applyDrop(AlarmDropped event) async {
     // Suppresses only the repeats this isolate can be certain of: the live
     // callback racing the drain, or two drains in one run.
     //
@@ -580,7 +735,8 @@ class Alarm {
     // notice the application ever gets. A duplicate is covered by the
     // documented `(id, recordedAt)` key; silence is not recoverable.
     final key = (event.id, event.recordedAt.millisecondsSinceEpoch);
-    final alreadyReported = !_reportedDrops.add(key);
+    final alreadyReported = _reportedEvents.contains(key);
+    if (!alreadyReported) _rememberReported(key);
 
     await AlarmStorage.unsaveAlarm(event.id);
     PlatformTimers.stopAlarm(event.id);
@@ -591,7 +747,10 @@ class Alarm {
     if (alreadyReported) {
       _log.info('Alarm ${event.id} was already reported as dropped in this '
           'session; not reporting it again.');
-      return true;
+      // Suppressed because the application already has it, which is not the
+      // same as never having been given it: this run handed the event over the
+      // first time, so this run must not acknowledge it on the app's behalf.
+      return (handled: true, reported: true);
     }
 
     _events.add(event);
@@ -600,14 +759,17 @@ class Alarm {
     _log.info('Alarm ${event.id} was dropped by the host '
         '(${event.cause.name}); it should have rung at '
         '${event.scheduledFor}.');
-    return true;
+    return (handled: true, reported: true);
   }
 
   /// Moves an alarm to its new time in Dart's own state, and reports it.
   ///
   /// Idempotent: applying a move already applied changes nothing and emits
   /// nothing.
-  static Future<bool> _applyMove(AlarmMoved event) async {
+  static Future<_EventOutcome> _applyMove(
+    AlarmMoved event,
+    bool acknowledgeAutomatically,
+  ) async {
     final alarmId = event.id;
     final nextRingAt = event.nextRingAt;
 
@@ -615,7 +777,7 @@ class Alarm {
     if (alarm == null) {
       _log.severe('Alarm $alarmId was moved but is not in storage, so the '
           'deferral cannot be applied. The alarm will not ring again.');
-      return false;
+      return (handled: false, reported: false);
     }
 
     // A marker whose time has already passed would rewrite the alarm to a past
@@ -623,7 +785,7 @@ class Alarm {
     if (!nextRingAt.isAfter(DateTime.now())) {
       _log.warning('Ignoring move for $alarmId: $nextRingAt is not in the '
           'future.');
-      return false;
+      return (handled: false, reported: false);
     }
 
     // Whether this deferral is news. A marker replayed after the stored time
@@ -653,11 +815,31 @@ class Alarm {
 
     // Only a deferral that actually moved the alarm is an event. [snoozed] is a
     // view over this, so it needs nothing of its own.
-    if (isNewDeferral) {
+    final key = (event.id, event.recordedAt.millisecondsSinceEpoch);
+    final alreadyGiven = _reportedEvents.contains(key);
+
+    // A marker that outlived a restart is proof the application never
+    // confirmed the event, because nothing else could have kept it. The stored
+    // time already matching says only that *the plugin* applied the deferral —
+    // which it does above, before emitting — so under the manual boundary
+    // "already applied" must not be read as "already delivered", or the one
+    // event the opt-out exists to protect is the one it silently drops.
+    //
+    // Re-emitted rather than acknowledged, for the reason [_applyDrop] gives
+    // for deliberately re-reporting a drop across runs: a duplicate is covered
+    // by the documented `(id, recordedAt)` key, and silence is not
+    // recoverable. Left alone under the default, where the plugin owns the
+    // acknowledgement and this run has nothing new to say.
+    final report =
+        isNewDeferral || (!acknowledgeAutomatically && !alreadyGiven);
+
+    if (report) {
+      _rememberReported(key);
       _events.add(event);
       updateStream.add(alarmId);
     }
-    return true;
+
+    return (handled: true, reported: report || alreadyGiven);
   }
 
   static Future<void> _alarmStopped(int alarmId) async {
