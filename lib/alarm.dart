@@ -104,13 +104,24 @@ class Alarm {
   /// [_eventReplayBufferSize] events.
   ///
   /// **Delivered at least once, not exactly once.** The host keeps its marker
-  /// until Dart acknowledges it, so a process death between applying an event
-  /// and acknowledging it replays that event on the next [init] — losing it
-  /// would be the worse failure. Re-subscribing also replays. The plugin
-  /// suppresses the repeats it can detect, but an application that acts
-  /// irreversibly on an event — posting a notification, writing a log row —
-  /// should key that action on `(id, recordedAt)`, which identifies an event
-  /// uniquely.
+  /// until Dart acknowledges it, so a process death before that acknowledgement
+  /// replays the event on the next [init] — losing it would be the worse
+  /// failure. Re-subscribing also replays. The plugin suppresses the repeats it
+  /// can detect, but an application that acts irreversibly on an event —
+  /// posting a notification, writing a log row — should key that action on
+  /// `(id, recordedAt)`, which identifies an event uniquely.
+  ///
+  /// **The acknowledgement does not wait for this stream's listeners.** It is
+  /// sent once the event has been *emitted*, and a stream discards whatever
+  /// future a handler returns, so a handler that persists the event is still in
+  /// flight when the host's marker is deleted — and depending on channel
+  /// latency it may not have started. A process death in that window loses the
+  /// event for good: the durable record is gone, and the replay buffer above is
+  /// in memory. It costs least for an [AlarmMoved], where the new time is
+  /// already stored on both sides and only the notice is lost, and most for an
+  /// [AlarmDropped], which is the only evidence the alarm did not ring. Closing
+  /// this means moving the acknowledgement to the application, which is
+  /// tracked in https://github.com/gdelataillade/alarm/issues/429.
   ///
   /// The plugin deliberately shows the user nothing for these. An
   /// [AlarmDropped] in particular is worth surfacing, but only the application
