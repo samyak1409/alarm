@@ -127,6 +127,15 @@ class Alarm {
   /// an alarm on its own, including deferrals the platform forced and alarms
   /// discarded as stale, and is the stream to prefer for new code.
   ///
+  /// Not a stream a manual acknowledgement boundary can be built on. A
+  /// subscriber here is handed `(id, nextRingAt)`, while [acknowledgeEvent]
+  /// needs the event's `recordedAt`, so there is nothing to acknowledge with.
+  /// Under `Alarm.init(acknowledgeEventsAutomatically: false)` the host keeps
+  /// an unacknowledged snooze marker for a week and re-emits it on every
+  /// [init], so a listener that shows the user a snackbar would show it again
+  /// on every launch until then. An application that takes the boundary should
+  /// listen to [events] and filter on [AlarmEventCause.snooze] itself.
+  ///
   /// A view over [events] rather than a stream of its own, so the two can never
   /// disagree about a deferral, and so this inherits the buffering described
   /// there: subscribing after [init] still delivers a snooze replayed during
@@ -246,6 +255,14 @@ class Alarm {
   /// about durability, so it must not be able to hand the boundary back and
   /// start acknowledging events the application still owns. Only an explicit
   /// value moves it, in either direction.
+  ///
+  /// The setting is per-isolate. It lives in static state that starts at the
+  /// default, so an isolate the application spawns does not inherit an opt-out
+  /// taken in the main one: it begins acknowledging automatically, and a bare
+  /// [init] there would acknowledge markers the main isolate still owns. The
+  /// plugin spawns none itself, so this only reaches an application that
+  /// creates one and calls into [Alarm] from it — which then has to pass the
+  /// value explicitly in every isolate rather than once at startup.
   static Future<void> init({bool? acknowledgeEventsAutomatically}) async {
     // Before anything that can drain: [checkAlarm] below applies pending
     // events, and it has to already know who owns their acknowledgement.
