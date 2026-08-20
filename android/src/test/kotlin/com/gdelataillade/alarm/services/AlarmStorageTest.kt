@@ -195,6 +195,27 @@ class AlarmStorageTest {
     }
 
     @Test
+    fun `a discard recorded now survives an alarm that was due days ago`() {
+        // The TTL is how long a notice stays worth delivering, not how old the
+        // alarm was. A discard at boot always describes a due time that has
+        // passed — that is what made it stale — so ageing it by that time would
+        // expire the marker the moment it was written.
+        val now = System.currentTimeMillis()
+        storage.saveAlarmEvent(droppedEvent(2, now - 3 * day, recordedAt = now))
+
+        assertNotNull(storage.getPendingAlarmEvents().firstOrNull { it.alarmId == 2 })
+    }
+
+    @Test
+    fun `a discard recorded more than a day ago is still pruned`() {
+        // The TTL still has to bite, or a marker Dart never applies lives forever.
+        val now = System.currentTimeMillis()
+        storage.saveAlarmEvent(droppedEvent(2, now - 3 * day, recordedAt = now - 2 * day))
+
+        assertTrue(storage.getPendingAlarmEvents().isEmpty())
+    }
+
+    @Test
     fun `an ancient deferral is pruned`() {
         storage.saveAlarmEvent(movedEvent(1, System.currentTimeMillis() - 8 * day))
 
