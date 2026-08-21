@@ -106,4 +106,22 @@ class AlarmSettingsTest {
 
         assertEquals(defaultMillis, AlarmSettings.fromJson(json).androidStaleAfterMillis)
     }
+
+    @Test
+    fun `the legacy parser falls back rather than throwing on a non-primitive`() {
+        // A string recovers through toLongOrNull, but an object or an array
+        // reaches neither branch: `jsonPrimitive` throws on those, which would
+        // cost the whole alarm rather than the one field.
+        val full = Json.encodeToString(settings(staleAfterMillis = 2_400_000L))
+
+        for (bad in listOf("{}", "[]", "{\"minutes\":15}")) {
+            val json = full.replace("\"androidStaleAfterMillis\":2400000", "\"androidStaleAfterMillis\":$bad")
+
+            assertEquals(
+                "recovered from $bad",
+                defaultMillis,
+                AlarmSettings.fromJson(json).androidStaleAfterMillis,
+            )
+        }
+    }
 }

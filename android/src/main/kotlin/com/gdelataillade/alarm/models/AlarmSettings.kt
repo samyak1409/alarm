@@ -123,7 +123,10 @@ data class AlarmSettings(
             val androidStaleAfterMillis = when (val stale = jsonObject["androidStaleAfterMillis"]) {
                 null -> DEFAULT_STALE_AFTER_MILLIS
                 JsonNull -> null
-                else -> stale.jsonPrimitive.content.toLongOrNull() ?: DEFAULT_STALE_AFTER_MILLIS
+                // Cast rather than jsonPrimitive, which throws on an object or
+                // an array instead of recovering like the two lines above.
+                else -> (stale as? JsonPrimitive)?.content?.toLongOrNull()
+                    ?: DEFAULT_STALE_AFTER_MILLIS
             }
 
             // Handle backward compatibility for `volumeSettings`

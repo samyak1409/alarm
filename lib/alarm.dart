@@ -354,9 +354,9 @@ class Alarm {
       throw AlarmException(
         AlarmErrorCode.invalidArguments,
         message: 'androidStaleAfter cannot be shorter than the '
-            '$_ringStartGrace grace [checkAlarm] gives an alarm that is due '
-            'but not yet ringing, or Dart would spare an alarm the boot '
-            'path had already discarded. Provided: $staleAfter',
+            '${_ringStartGrace.inSeconds}s grace [checkAlarm] gives an alarm '
+            'that is due but not yet ringing, or Dart would spare an alarm '
+            'the boot path had already discarded. Provided: $staleAfter',
       );
     }
 
