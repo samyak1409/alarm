@@ -176,7 +176,16 @@ data class AlarmSettingsWire (
    * below a few seconds, which survives neither process death nor
    * cancellation. Android only.
    */
-  val androidSnoozeDurationMillis: Long? = null
+  val androidSnoozeDurationMillis: Long? = null,
+  /**
+   * How long past its due time an alarm found at boot is still worth
+   * ringing, in milliseconds.
+   *
+   * Null means never discard. Absent from an alarm stored before the
+   * setting existed, which reads as the default rather than as null.
+   * Android only.
+   */
+  val androidStaleAfterMillis: Long? = null
 )
  {
   companion object {
@@ -196,7 +205,8 @@ data class AlarmSettingsWire (
       val androidStopAlarmOnTermination = pigeonVar_list[12] as Boolean
       val preferConnectedAudioDevice = pigeonVar_list[13] as Boolean
       val androidSnoozeDurationMillis = pigeonVar_list[14] as Long?
-      return AlarmSettingsWire(id, millisecondsSinceEpoch, assetAudioPath, volumeSettings, notificationSettings, loopAudio, vibrate, warningNotificationOnKill, androidFullScreenIntent, allowAlarmOverlap, allowSameSecondScheduling, iOSBackgroundAudio, androidStopAlarmOnTermination, preferConnectedAudioDevice, androidSnoozeDurationMillis)
+      val androidStaleAfterMillis = pigeonVar_list[15] as Long?
+      return AlarmSettingsWire(id, millisecondsSinceEpoch, assetAudioPath, volumeSettings, notificationSettings, loopAudio, vibrate, warningNotificationOnKill, androidFullScreenIntent, allowAlarmOverlap, allowSameSecondScheduling, iOSBackgroundAudio, androidStopAlarmOnTermination, preferConnectedAudioDevice, androidSnoozeDurationMillis, androidStaleAfterMillis)
     }
   }
   fun toList(): List<Any?> {
@@ -216,6 +226,7 @@ data class AlarmSettingsWire (
       androidStopAlarmOnTermination,
       preferConnectedAudioDevice,
       androidSnoozeDurationMillis,
+      androidStaleAfterMillis,
     )
   }
   override fun equals(other: Any?): Boolean {

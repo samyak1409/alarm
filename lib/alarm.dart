@@ -481,6 +481,17 @@ class Alarm {
       );
     }
 
+    final staleAfter = alarmSettings.androidStaleAfter;
+    if (staleAfter != null && staleAfter < _ringStartGrace) {
+      throw AlarmException(
+        AlarmErrorCode.invalidArguments,
+        message: 'androidStaleAfter cannot be shorter than the '
+            '${_ringStartGrace.inSeconds}s grace [checkAlarm] gives an alarm '
+            'that is due but not yet ringing, or Dart would spare an alarm '
+            'the boot path had already discarded. Provided: $staleAfter',
+      );
+    }
+
     // Everything below only warns. These settings are inert on iOS, and
     // NotificationSettings is shared across platforms, so throwing would break
     // apps that configure a snooze label once for both.
