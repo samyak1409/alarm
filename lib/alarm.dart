@@ -188,7 +188,14 @@ class Alarm {
   /// [acknowledgeEvent], so the boundary sits where the durable work happens
   /// instead of one statement after the emit. The cost is that an event the
   /// application never acknowledges is redelivered until the marker expires;
-  /// see [acknowledgeEvent]. This becomes the only behaviour in 6.0.0.
+  /// see [acknowledgeEvent].
+  ///
+  /// Automatic acknowledgement stays the default rather than becoming a staged
+  /// migration, because [snoozed] cannot take part in the manual boundary: it
+  /// hands its subscriber `(id, nextRingAt)`, and [acknowledgeEvent] needs the
+  /// event's `recordedAt`. Making the manual path mandatory would leave that
+  /// stream replaying every deferral on each launch with nothing able to
+  /// acknowledge it. Consume this stream instead if you want the boundary.
   ///
   /// The plugin deliberately shows the user nothing for these. An
   /// [AlarmDropped] in particular is worth surfacing, but only the application
@@ -246,8 +253,9 @@ class Alarm {
   ///
   /// Pass `acknowledgeEventsAutomatically: false` to take the durability
   /// boundary for [events] yourself; see [acknowledgeEvent] for what that
-  /// costs and what it buys. Starts out `true`, preserving 5.10.0's behaviour,
-  /// and becomes `false` in 6.0.0 with the automatic path removed.
+  /// costs and what it buys. Defaults to `true`, which is 5.10.0's behaviour,
+  /// and stays that way: an advanced opt-in rather than a future default, for
+  /// the reason given on [events].
   ///
   /// **Omitting it leaves the boundary as it is**, rather than restoring the
   /// default. This is callable more than once — on resume, or from a second
