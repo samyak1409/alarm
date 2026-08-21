@@ -155,9 +155,12 @@ class AlarmStorage internal constructor(private val dataStore: DataStore<Prefere
      *
      * Non-destructive on purpose: a marker survives until
      * [acknowledgeAlarmEvent] confirms Dart durably applied it, so a read
-     * followed by a crash loses nothing. Markers whose moment has passed by more
-     * than the per-verb TTL are dropped, so one Dart can never apply cannot
-     * accumulate forever.
+     * followed by a crash loses nothing. Markers are dropped once the per-verb
+     * TTL has passed, so one Dart can never apply cannot accumulate forever.
+     * That is measured from the later of when the event happened and when it
+     * was recorded: a deferral ages from the time it now rings, while a discard
+     * of an alarm missed days ago ages from the moment it was discarded rather
+     * than from a due time that was already long gone.
      *
      * Also reads markers written by 5.7.0–5.9.0 under the old snooze-only key,
      * so an app upgrading with a deferral pending does not lose it. Those carry
@@ -189,8 +192,14 @@ class AlarmStorage internal constructor(private val dataStore: DataStore<Prefere
                     AlarmEventVerb.MOVED -> MOVED_MARKER_TTL_MILLIS
                     AlarmEventVerb.DROPPED -> DROPPED_MARKER_TTL_MILLIS
                 }
-                if (now - event.atMillis > ttl) {
-                    Log.w(TAG, "Dropping ${event.verb} marker for ${event.alarmId}, stale since ${event.atMillis}.")
+                // The later of the two, not atMillis alone: a STALE_AT_BOOT
+                // drop describes an alarm whose own time may be days past, so
+                // ageing it by that would expire the marker before the
+                // application ever ran. A MOVED marker still ages from the time
+                // it now rings, which is the later value for a deferral.
+                val bornAt = maxOf(event.atMillis, event.recordedAtMillis)
+                if (now - bornAt > ttl) {
+                    Log.w(TAG, "Dropping ${event.verb} marker for ${event.alarmId}, stale since $bornAt.")
                     expired.add(key)
                 } else {
                     events.add(event)

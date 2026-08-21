@@ -6,6 +6,13 @@ import 'package:logging/logging.dart';
 
 part 'alarm_settings.g.dart';
 
+/// Backs [AlarmSettings.defaultStaleAfter].
+///
+/// Top level because `json_serializable` copies a constructor default into
+/// the generated part verbatim, where a static member of the class is not in
+/// scope. [AlarmSettings.defaultStaleAfter] is the name to use.
+const _defaultStaleAfter = Duration(minutes: 15);
+
 /// [AlarmSettings] is a model that contains all the settings to customize
 /// and set an alarm.
 @JsonSerializable()
@@ -28,6 +35,7 @@ class AlarmSettings extends Equatable {
     this.preferConnectedAudioDevice = false,
     this.payload,
     this.androidSnoozeDuration,
+    this.androidStaleAfter = _defaultStaleAfter,
   });
 
   /// Constructs an `AlarmSettings` instance from the given JSON data.
@@ -100,6 +108,23 @@ class AlarmSettings extends Equatable {
   /// cancellation — so a shorter snooze could be neither guaranteed nor undone.
   /// A shorter duration offers no snooze at all rather than an unreliable one.
   static const minSnoozeDuration = Duration(minutes: 1);
+
+  /// Default [androidStaleAfter].
+  ///
+  /// Long enough that a reboot straddling the alarm still rings — a phone
+  /// that restarts itself at 05:58 for a system update is back well inside
+  /// this — and short enough that a phone switched on hours later stays
+  /// quiet, where the user is already awake and a late ring is noise.
+  static const defaultStaleAfter = _defaultStaleAfter;
+
+  /// Value [androidStaleAfter] takes in JSON to mean never discard.
+  ///
+  /// A null field is omitted from the encoded map entirely, and a missing
+  /// key has to keep meaning [defaultStaleAfter] so that alarms stored
+  /// before this setting existed still get the new policy. Writing a
+  /// sentinel instead keeps the two distinguishable across a restart. Part
+  /// of the contract of [toJson], which is public.
+  static const neverDiscardSentinel = -1;
 
   /// Unique identifier associated with the alarm. Cannot be 0 or -1.
   final int id;
@@ -232,6 +257,55 @@ class AlarmSettings extends Equatable {
   /// delays, and the fallback survives neither process death nor cancellation.
   final Duration? androidSnoozeDuration;
 
+  /// How long past its due time an alarm found at boot is still worth
+  /// ringing.
+  ///
+  /// **Android only.** A device that was off when an alarm was due rings it
+  /// as soon as it boots. Past this much delay that is noise rather than a
+  /// wake-up — an alarm set for 06:00 blaring at 08:00 tells the user
+  /// nothing they cannot already see — so the alarm is discarded instead
+  /// and reported as an [AlarmDropped] with cause
+  /// [AlarmEventCause.staleAtBoot].
+  ///
+  /// Defaults to [defaultStaleAfter]. **An explicit null never discards**,
+  /// which is the behaviour of 5.10.0 and earlier, for an alarm that has to
+  /// ring however late. Omitting it and asking for null are deliberately
+  /// different things.
+  ///
+  /// Cannot be shorter than the grace period [Alarm.checkAlarm] already
+  /// gives an alarm that is due but not yet audible, or Dart would spare an
+  /// alarm the boot path had discarded; [Alarm.set] throws
+  /// [AlarmErrorCode.invalidArguments] instead of letting the two disagree.
+  @JsonKey(fromJson: _staleAfterFromJson, toJson: _staleAfterToJson)
+  final Duration? androidStaleAfter;
+
+  /// Reads [androidStaleAfter], recovering rather than throwing.
+  ///
+  /// Nothing between [Alarm.init] and the storage read catches, so throwing
+  /// here would cost the user every stored alarm rather than the one malformed
+  /// field. An unusable value falls back to [defaultStaleAfter], the same
+  /// answer an absent key gives.
+  static Duration? _staleAfterFromJson(Object? value) {
+    // Integral doubles are accepted: a re-encoder can turn 900000 into
+    // 900000.0, while 1.5 would truncate to a one-microsecond window.
+    if (value is! num || !value.isFinite || value % 1 != 0) {
+      _log.warning('Unusable androidStaleAfter $value; using the default.');
+      return defaultStaleAfter;
+    }
+    final micros = value.toInt();
+    if (micros == neverDiscardSentinel) return null;
+    if (micros < 0) {
+      _log.warning('Unusable androidStaleAfter $micros; using the default.');
+      return defaultStaleAfter;
+    }
+    return Duration(microseconds: micros);
+  }
+
+  /// Writes [androidStaleAfter]. The non-null return also stops
+  /// `json_serializable` omitting the key, which is what would lose a null.
+  static int _staleAfterToJson(Duration? value) =>
+      value?.inMicroseconds ?? neverDiscardSentinel;
+
   /// Converts the `AlarmSettings` instance to a JSON object.
   Map<String, dynamic> toJson() => _$AlarmSettingsToJson(this);
 
@@ -252,6 +326,7 @@ class AlarmSettings extends Equatable {
         androidStopAlarmOnTermination: androidStopAlarmOnTermination,
         preferConnectedAudioDevice: preferConnectedAudioDevice,
         androidSnoozeDurationMillis: androidSnoozeDuration?.inMilliseconds,
+        androidStaleAfterMillis: androidStaleAfter?.inMilliseconds,
       );
 
   /// Creates a copy of `AlarmSettings` but with the given fields replaced with
@@ -287,6 +362,7 @@ class AlarmSettings extends Equatable {
     bool? preferConnectedAudioDevice,
     String? Function()? payload,
     Duration? Function()? androidSnoozeDuration,
+    Duration? Function()? androidStaleAfter,
   }) {
     return AlarmSettings(
       id: id ?? this.id,
@@ -316,6 +392,11 @@ class AlarmSettings extends Equatable {
       androidSnoozeDuration: androidSnoozeDuration != null
           ? androidSnoozeDuration()
           : this.androidSnoozeDuration,
+      // Wrapped for the same reason, and here null is a real choice rather
+      // than an absence: it means never discard.
+      androidStaleAfter: androidStaleAfter != null
+          ? androidStaleAfter()
+          : this.androidStaleAfter,
     );
   }
 
@@ -337,5 +418,6 @@ class AlarmSettings extends Equatable {
         preferConnectedAudioDevice,
         payload,
         androidSnoozeDuration,
+        androidStaleAfter,
       ];
 }

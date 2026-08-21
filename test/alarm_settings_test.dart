@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:alarm/alarm.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -251,6 +253,113 @@ void main() {
 
     test('different ids compare unequal', () {
       expect(buildSettings(), isNot(equals(buildSettings(id: 2))));
+    });
+  });
+
+  group('AlarmSettings androidStaleAfter', () {
+    // Three states have to survive storage, and a plain nullable field cannot
+    // express them: json_serializable omits a null from the encoded map, and
+    // reads a missing key as the constructor default. That would turn "never
+    // discard" into fifteen minutes on the first restart after it was set,
+    // which is the one moment the choice matters.
+    Map<String, dynamic> encoded(AlarmSettings settings) =>
+        jsonDecode(jsonEncode(settings.toJson())) as Map<String, dynamic>;
+
+    test('defaults to fifteen minutes when the caller says nothing', () {
+      expect(AlarmSettings.defaultStaleAfter, const Duration(minutes: 15));
+      expect(
+        buildSettings().androidStaleAfter,
+        AlarmSettings.defaultStaleAfter,
+      );
+    });
+
+    test('an explicit null survives a round trip as never discard', () {
+      final json =
+          encoded(buildSettings().copyWith(androidStaleAfter: () => null));
+
+      expect(json['androidStaleAfter'], AlarmSettings.neverDiscardSentinel);
+      expect(AlarmSettings.fromJson(json).androidStaleAfter, isNull);
+    });
+
+    test('a duration survives a round trip', () {
+      final json = encoded(
+        buildSettings().copyWith(
+          androidStaleAfter: () => const Duration(minutes: 40),
+        ),
+      );
+
+      expect(
+        AlarmSettings.fromJson(json).androidStaleAfter,
+        const Duration(minutes: 40),
+      );
+    });
+
+    test('an alarm stored before the setting existed takes the default', () {
+      final json = encoded(buildSettings())..remove('androidStaleAfter');
+
+      expect(
+        AlarmSettings.fromJson(json).androidStaleAfter,
+        AlarmSettings.defaultStaleAfter,
+      );
+    });
+
+    test('an integral double is read as that duration', () {
+      final json = buildSettings().toJson()
+        ..['androidStaleAfter'] =
+            const Duration(minutes: 20).inMicroseconds * 1.0;
+
+      expect(
+        AlarmSettings.fromJson(json).androidStaleAfter,
+        const Duration(minutes: 20),
+      );
+    });
+
+    test('an unusable value falls back to the default rather than throwing',
+        () {
+      // Throwing would be worse than wrong: nothing between Alarm.init and the
+      // storage read catches, so one malformed field would cost the user every
+      // stored alarm. A fraction is in the list because 1.5 microseconds would
+      // otherwise truncate to a one-microsecond window and discard everything.
+      for (final unusable in <Object?>[
+        'oops',
+        1.5,
+        -2,
+        double.nan,
+        double.infinity,
+        <int>[],
+        <String, int>{},
+      ]) {
+        final json = buildSettings().toJson()..['androidStaleAfter'] = unusable;
+
+        expect(
+          AlarmSettings.fromJson(json).androidStaleAfter,
+          AlarmSettings.defaultStaleAfter,
+          reason: 'for $unusable',
+        );
+      }
+    });
+
+    test('toWire sends milliseconds, and null for never discard', () {
+      expect(buildSettings().toWire().androidStaleAfterMillis, 900000);
+      expect(
+        buildSettings()
+            .copyWith(androidStaleAfter: () => null)
+            .toWire()
+            .androidStaleAfterMillis,
+        isNull,
+      );
+    });
+
+    test('copyWith can clear it and set it back', () {
+      final never = buildSettings().copyWith(androidStaleAfter: () => null);
+      expect(never.androidStaleAfter, isNull);
+
+      final restored =
+          never.copyWith(androidStaleAfter: () => const Duration(hours: 1));
+      expect(restored.androidStaleAfter, const Duration(hours: 1));
+
+      // Not passing it at all leaves the choice alone, including the null one.
+      expect(never.copyWith(id: 9).androidStaleAfter, isNull);
     });
   });
 }

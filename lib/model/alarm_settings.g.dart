@@ -43,6 +43,11 @@ AlarmSettings _$AlarmSettingsFromJson(Map<String, dynamic> json) =>
               (v) => v == null
                   ? null
                   : Duration(microseconds: (v as num).toInt())),
+          androidStaleAfter: $checkedConvert(
+              'androidStaleAfter',
+              (v) => v == null
+                  ? _defaultStaleAfter
+                  : AlarmSettings._staleAfterFromJson(v)),
         );
         return val;
       },
@@ -67,4 +72,6 @@ Map<String, dynamic> _$AlarmSettingsToJson(AlarmSettings instance) =>
       if (instance.payload case final value?) 'payload': value,
       if (instance.androidSnoozeDuration?.inMicroseconds case final value?)
         'androidSnoozeDuration': value,
+      'androidStaleAfter':
+          AlarmSettings._staleAfterToJson(instance.androidStaleAfter),
     };

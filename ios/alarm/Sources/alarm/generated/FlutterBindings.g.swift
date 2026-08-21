@@ -200,6 +200,13 @@ struct AlarmSettingsWire: Hashable {
   /// below a few seconds, which survives neither process death nor
   /// cancellation. Android only.
   var androidSnoozeDurationMillis: Int64? = nil
+  /// How long past its due time an alarm found at boot is still worth
+  /// ringing, in milliseconds.
+  ///
+  /// Null means never discard. Absent from an alarm stored before the
+  /// setting existed, which reads as the default rather than as null.
+  /// Android only.
+  var androidStaleAfterMillis: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -219,6 +226,7 @@ struct AlarmSettingsWire: Hashable {
     let androidStopAlarmOnTermination = pigeonVar_list[12] as! Bool
     let preferConnectedAudioDevice = pigeonVar_list[13] as! Bool
     let androidSnoozeDurationMillis: Int64? = nilOrValue(pigeonVar_list[14])
+    let androidStaleAfterMillis: Int64? = nilOrValue(pigeonVar_list[15])
 
     return AlarmSettingsWire(
       id: id,
@@ -235,7 +243,8 @@ struct AlarmSettingsWire: Hashable {
       iOSBackgroundAudio: iOSBackgroundAudio,
       androidStopAlarmOnTermination: androidStopAlarmOnTermination,
       preferConnectedAudioDevice: preferConnectedAudioDevice,
-      androidSnoozeDurationMillis: androidSnoozeDurationMillis
+      androidSnoozeDurationMillis: androidSnoozeDurationMillis,
+      androidStaleAfterMillis: androidStaleAfterMillis
     )
   }
   func toList() -> [Any?] {
@@ -255,6 +264,7 @@ struct AlarmSettingsWire: Hashable {
       androidStopAlarmOnTermination,
       preferConnectedAudioDevice,
       androidSnoozeDurationMillis,
+      androidStaleAfterMillis,
     ]
   }
   static func == (lhs: AlarmSettingsWire, rhs: AlarmSettingsWire) -> Bool {

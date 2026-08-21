@@ -110,6 +110,7 @@ class AlarmSettingsWire {
     required this.androidStopAlarmOnTermination,
     required this.preferConnectedAudioDevice,
     this.androidSnoozeDurationMillis,
+    this.androidStaleAfterMillis,
   });
 
   int id;
@@ -148,6 +149,14 @@ class AlarmSettingsWire {
   /// cancellation. Android only.
   int? androidSnoozeDurationMillis;
 
+  /// How long past its due time an alarm found at boot is still worth
+  /// ringing, in milliseconds.
+  ///
+  /// Null means never discard. Absent from an alarm stored before the
+  /// setting existed, which reads as the default rather than as null.
+  /// Android only.
+  int? androidStaleAfterMillis;
+
   List<Object?> _toList() {
     return <Object?>[
       id,
@@ -165,6 +174,7 @@ class AlarmSettingsWire {
       androidStopAlarmOnTermination,
       preferConnectedAudioDevice,
       androidSnoozeDurationMillis,
+      androidStaleAfterMillis,
     ];
   }
 
@@ -190,6 +200,7 @@ class AlarmSettingsWire {
       androidStopAlarmOnTermination: result[12]! as bool,
       preferConnectedAudioDevice: result[13]! as bool,
       androidSnoozeDurationMillis: result[14] as int?,
+      androidStaleAfterMillis: result[15] as int?,
     );
   }
 

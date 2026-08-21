@@ -77,6 +77,49 @@ void main() {
       );
     });
 
+    test('rejects an androidStaleAfter below the ring-start grace', () {
+      // Below the grace checkAlarm gives a due alarm, Dart would leave alone an
+      // alarm the boot path had already discarded, so the two stores would
+      // disagree about whether it still exists. Caught at set() rather than
+      // silently at the next boot.
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42).copyWith(
+            androidStaleAfter: () => const Duration(seconds: 29),
+          ),
+        ),
+        throwsA(
+          isA<AlarmException>().having(
+            (e) => e.code,
+            'code',
+            AlarmErrorCode.invalidArguments,
+          ),
+        ),
+      );
+    });
+
+    test('accepts an androidStaleAfter at the grace, and never discarding', () {
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42).copyWith(
+            androidStaleAfter: () => const Duration(seconds: 30),
+          ),
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Alarm.alarmSettingsValidation(
+          buildSettings(42).copyWith(androidStaleAfter: () => null),
+        ),
+        returnsNormally,
+      );
+      // And the default an ordinary caller gets.
+      expect(
+        () => Alarm.alarmSettingsValidation(buildSettings(42)),
+        returnsNormally,
+      );
+    });
+
     test('rejects a non-positive snooze duration', () {
       expect(
         () => Alarm.alarmSettingsValidation(

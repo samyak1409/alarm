@@ -32,6 +32,8 @@ data class AlarmSettings(
     val preferConnectedAudioDevice: Boolean = false, // Defaults to false for backward compatibility
     // Null, or below SNOOZE_MINIMUM_MILLIS, offers no snooze.
     val androidSnoozeDurationMillis: Long? = null,
+    // Absent means the default; an explicit null means never discard.
+    val androidStaleAfterMillis: Long? = DEFAULT_STALE_AFTER_MILLIS,
 ) {
     /** Whether this alarm can be deferred rather than only stopped. */
     val canSnooze: Boolean
@@ -47,6 +49,16 @@ data class AlarmSettings(
          * than this could not be honoured or undone.
          */
         const val SNOOZE_MINIMUM_MILLIS = 60_000L
+
+        /**
+         * How long past its due time an alarm found at boot is still worth
+         * ringing, when the alarm does not say.
+         *
+         * Long enough that a reboot straddling the alarm still rings, short
+         * enough that a phone switched on hours later stays quiet. Must match
+         * `AlarmSettings.defaultStaleAfter` on the Dart side.
+         */
+        const val DEFAULT_STALE_AFTER_MILLIS = 900_000L
 
         fun fromWire(e: AlarmSettingsWire): AlarmSettings {
             return AlarmSettings(
@@ -64,6 +76,7 @@ data class AlarmSettings(
                 e.androidStopAlarmOnTermination,
                 e.preferConnectedAudioDevice,
                 e.androidSnoozeDurationMillis,
+                e.androidStaleAfterMillis,
             )
         }
 
@@ -102,6 +115,17 @@ data class AlarmSettings(
             // the alarm can only be stopped.
             val androidSnoozeDurationMillis = jsonObject.primitiveLong("androidSnoozeDurationMillis")
 
+            // Three states, which primitiveLong alone cannot tell apart: absent
+            // means an alarm saved before the cutoff existed, and takes the
+            // default; an explicit null means never discard; anything
+            // unparseable falls back to the default rather than dropping the
+            // alarm, matching the Dart reader.
+            val androidStaleAfterMillis = when (val stale = jsonObject["androidStaleAfterMillis"]) {
+                null -> DEFAULT_STALE_AFTER_MILLIS
+                JsonNull -> null
+                else -> stale.jsonPrimitive.content.toLongOrNull() ?: DEFAULT_STALE_AFTER_MILLIS
+            }
+
             // Handle backward compatibility for `volumeSettings`
             val volumeSettings = jsonObject["volumeSettings"]?.let {
                 Json.decodeFromJsonElement(VolumeSettings.serializer(), it)
@@ -135,6 +159,7 @@ data class AlarmSettings(
                 androidStopAlarmOnTermination = androidStopAlarmOnTermination,
                 preferConnectedAudioDevice = preferConnectedAudioDevice,
                 androidSnoozeDurationMillis = androidSnoozeDurationMillis,
+                androidStaleAfterMillis = androidStaleAfterMillis,
             )
         }
     }
