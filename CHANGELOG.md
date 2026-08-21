@@ -1,8 +1,7 @@
 ## 5.11.0
-* **[Android] An alarm whose time passed while the device was off is now discarded at boot instead of ringing immediately (#418).** Previously every stored alarm was re-armed with no age limit, so an alarm set for 06:00 sounded at 08:00 when the phone was switched on. Alarms missed by more than `AlarmSettings.androidStaleAfter` are dropped and reported through `Alarm.events` as an `AlarmDropped` with cause `staleAtBoot`, so the application can tell its user the alarm was missed.
-* Added `AlarmSettings.androidStaleAfter`, defaulting to 15 minutes — long enough that a reboot straddling the alarm still rings, short enough that a phone switched on hours later stays quiet. Pass `null` to never discard, which is the behavior of 5.10.0 and earlier.
-* Added `Alarm.acknowledgeEvent()` and `Alarm.init(acknowledgeEventsAutomatically: false)`, which move the durability boundary for `Alarm.events` to the application: the host keeps its marker until the app has finished writing the event down, instead of dropping it as soon as the event is emitted. Under the opt-out an event whose marker outlived a restart is reported again, since the surviving marker is the proof the app never confirmed it. Opt-in, and the automatic path stays the default.
-* [Android] A host event delivered while an engine is attached is now acknowledged by Dart rather than by the host on reply, so the boundary above covers it too.
+* **[Android] An alarm whose time passed while the device was off is now discarded instead of ringing at boot (#418).** Reported on `Alarm.events` as an `AlarmDropped` with cause `staleAtBoot`.
+* Added `AlarmSettings.androidStaleAfter`, the cutoff for that: 15 minutes by default, `null` never discards.
+* Added `Alarm.acknowledgeEvent()` and `Alarm.init(acknowledgeEventsAutomatically: false)`, so an app can keep a host event until it has durably recorded it (#429).
 
 ## 5.10.0
 * [Android] Fixed an alarm due within ~45s of a reboot never ringing (#424).
