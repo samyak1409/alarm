@@ -94,13 +94,13 @@ object SnoozeCoordinator {
             NotificationHandler(context).cancelNotification(alarmId)
         }
 
+        // The marker is deliberately left for Dart to drop. A successful reply
+        // here means Dart emitted the event, not that an application handler
+        // has finished persisting it, so acknowledging on this side would
+        // delete the only durable record while that write is still in flight.
+        // See `Alarm.acknowledgeEvent`.
         AlarmPlugin.alarmTriggerApi?.alarmEvent(event.toWire()) { result ->
-            if (result.isSuccess) {
-                // Dart has durably applied it, so the marker has done its job.
-                // Matching on the recorded time means this cannot drop a newer
-                // event recorded for the same alarm in the meantime.
-                storage.acknowledgeAlarmEvent(alarmId, recordedAt)
-            } else {
+            if (result.isFailure) {
                 Log.d(TAG, "Dart did not apply the snooze for $alarmId; keeping the marker.")
             }
         }
