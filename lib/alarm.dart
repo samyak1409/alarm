@@ -119,22 +119,28 @@ class Alarm {
   /// Stream of alarms deferred on the host side, with the instant each one
   /// rings again.
   ///
+  /// **Deprecated. Listen to [events] and filter on [AlarmEventCause.snooze]
+  /// instead**, which reports the same deferrals and carries one more field.
+  ///
+  /// That field is the one a manual acknowledgement boundary needs. A
+  /// subscriber here is handed `(id, nextRingAt)`, while [acknowledgeEvent]
+  /// needs the event's `recordedAt`, so there is nothing to acknowledge with.
+  /// Under `Alarm.init(acknowledgeEventsAutomatically: false)` the host keeps
+  /// an unacknowledged snooze marker for a week and re-emits it on every
+  /// [init], so a listener that shows the user a snackbar would show it again
+  /// on every launch until then, and no care taken in the application can
+  /// prevent it. That dead end is also why automatic acknowledgement stayed
+  /// the default rather than becoming a staged migration; see [events].
+  ///
+  /// Everything below still holds while it remains.
+  ///
   /// A snooze never reaches [ringing] as a stop: the alarm is still owed, and
   /// an application tracking its own alarm state needs to record a deferral
   /// rather than a dismissal.
   ///
   /// Only covers user snoozes. [events] reports every change the host makes to
   /// an alarm on its own, including deferrals the platform forced and alarms
-  /// discarded as stale, and is the stream to prefer for new code.
-  ///
-  /// Not a stream a manual acknowledgement boundary can be built on. A
-  /// subscriber here is handed `(id, nextRingAt)`, while [acknowledgeEvent]
-  /// needs the event's `recordedAt`, so there is nothing to acknowledge with.
-  /// Under `Alarm.init(acknowledgeEventsAutomatically: false)` the host keeps
-  /// an unacknowledged snooze marker for a week and re-emits it on every
-  /// [init], so a listener that shows the user a snackbar would show it again
-  /// on every launch until then. An application that takes the boundary should
-  /// listen to [events] and filter on [AlarmEventCause.snooze] itself.
+  /// discarded as stale.
   ///
   /// A view over [events] rather than a stream of its own, so the two can never
   /// disagree about a deferral, and so this inherits the buffering described
@@ -142,6 +148,7 @@ class Alarm {
   /// it. Before that it was a plain broadcast stream, and a deferral taken with
   /// no engine running reached only listeners that already existed — which the
   /// documented `await Alarm.init()` in `main` made unlikely.
+  @Deprecated('Use [events] and filter on [AlarmEventCause.snooze].')
   static Stream<({int id, DateTime nextRingAt})> get snoozed => _events.stream
       .where(
         (event) => event is AlarmMoved && event.cause == AlarmEventCause.snooze,
@@ -195,7 +202,9 @@ class Alarm {
   /// hands its subscriber `(id, nextRingAt)`, and [acknowledgeEvent] needs the
   /// event's `recordedAt`. Making the manual path mandatory would leave that
   /// stream replaying every deferral on each launch with nothing able to
-  /// acknowledge it. Consume this stream instead if you want the boundary.
+  /// acknowledge it. Consume this stream instead if you want the boundary —
+  /// [snoozed] is deprecated for that reason, which is the other half of the
+  /// same decision.
   ///
   /// The plugin deliberately shows the user nothing for these. An
   /// [AlarmDropped] in particular is worth surfacing, but only the application

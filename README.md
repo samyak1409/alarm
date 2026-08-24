@@ -219,9 +219,10 @@ Two things to know before you do:
 - **An event you never acknowledge is redelivered on every `init()`** until the native marker
   expires — 24 h for an `AlarmDropped`, a week for an `AlarmMoved`. Acknowledge every event you are
   given, including ones you decide to ignore.
-- **The setting is per-isolate**, and `Alarm.snoozed` carries no handle to acknowledge with. Pass it
-  in every isolate that calls `init()`, and use `Alarm.events` rather than `Alarm.snoozed` if you
-  take the boundary.
+- **The setting is per-isolate.** Pass it in every isolate that calls `init()`.
+- **The deprecated `Alarm.snoozed` cannot take part.** It carries no `recordedAt`, so a subscriber
+  there has nothing to acknowledge with and the marker is redelivered on every launch until it
+  expires a week later. Filter `Alarm.events` on `AlarmEventCause.snooze` instead.
 
 ## 📱 Example app
 
@@ -427,14 +428,23 @@ Below that, Android stops scheduling through `AlarmManager` and falls back to
 an in-process timer that survives neither app termination nor cancellation, so
 a shorter snooze could be neither guaranteed nor undone.
 
-A snooze is reported as `Alarm.snoozed`, never as a stop, because the alarm is
+A snooze is reported on `Alarm.events`, never as a stop, because the alarm is
 still owed:
 
 ```Dart
-Alarm.snoozed.listen((snooze) {
+Alarm.events
+    .where((e) => e is AlarmMoved && e.cause == AlarmEventCause.snooze)
+    .cast<AlarmMoved>()
+    .listen((snooze) {
   print('Alarm ${snooze.id} rings again at ${snooze.nextRingAt}');
 });
 ```
+
+> `Alarm.snoozed` reports the same deferrals in a shorter form and still works,
+> but it is **deprecated**: it hands you `(id, nextRingAt)` with no
+> `recordedAt`, so a subscriber there has nothing to pass to
+> `Alarm.acknowledgeEvent`. See
+> [taking the durability boundary yourself](#taking-the-durability-boundary-yourself).
 
 The alarm also leaves `Alarm.ringing` and reappears in `Alarm.scheduled` with
 its new `dateTime`, so an app that tracks alarm state through those streams
@@ -448,7 +458,7 @@ record is kept until Dart confirms it stored the new time, so a crash in
 between loses nothing, and applying the same deferral twice does nothing the
 second time.
 
-`Alarm.snoozed` is buffered, so subscribing after `Alarm.init()` — the order the
+`Alarm.events` is buffered, so subscribing after `Alarm.init()` — the order the
 setup above recommends — still delivers a deferral replayed during it. A
 listener that subscribes later receives it too, so key any irreversible reaction
 on the alarm id and the deferral time rather than assuming one delivery.

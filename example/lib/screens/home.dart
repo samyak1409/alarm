@@ -11,7 +11,7 @@ import 'package:alarm_example/widgets/tile.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const version = '5.11.0';
+const version = '5.12.0';
 
 class ExampleAlarmHomeScreen extends StatefulWidget {
   const ExampleAlarmHomeScreen({super.key});
@@ -26,7 +26,7 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
 
   StreamSubscription<AlarmSet>? ringSubscription;
   StreamSubscription<AlarmSet>? updateSubscription;
-  StreamSubscription<({int id, DateTime nextRingAt})>? snoozeSubscription;
+  StreamSubscription<AlarmMoved>? snoozeSubscription;
 
   @override
   void initState() {
@@ -42,11 +42,19 @@ class _ExampleAlarmHomeScreenState extends State<ExampleAlarmHomeScreen> {
     // Android only. Receives snoozes taken while the app is running, and also
     // the ones replayed during Alarm.init() -- the stream is buffered, so
     // subscribing from a widget built after init still delivers those.
-    snoozeSubscription = Alarm.snoozed.listen(snoozed);
+    // Alarm.events rather than the deprecated Alarm.snoozed: the same
+    // deferrals, plus the recordedAt that Alarm.acknowledgeEvent needs.
+    snoozeSubscription = Alarm.events
+        .where(
+          (event) =>
+              event is AlarmMoved && event.cause == AlarmEventCause.snooze,
+        )
+        .cast<AlarmMoved>()
+        .listen(snoozed);
     notifications = Notifications();
   }
 
-  void snoozed(({int id, DateTime nextRingAt}) snooze) {
+  void snoozed(AlarmMoved snooze) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
