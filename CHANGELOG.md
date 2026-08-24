@@ -1,5 +1,5 @@
 ## 5.12.0
-* **Deprecated `Alarm.snoozed` (#435).** Listen to `Alarm.events` and filter on `AlarmEventCause.snooze` instead: it reports the same deferrals and also carries `recordedAt`, which `Alarm.acknowledgeEvent()` needs. A subscriber to `Alarm.snoozed` is handed only `(id, nextRingAt)`, so under `Alarm.init(acknowledgeEventsAutomatically: false)` it has nothing to acknowledge with and the marker is redelivered on every `init()` until it expires a week later. No removal version, matching `updateStream` and `ringStream`.
+* **Deprecated `Alarm.snoozed` (#435).** Listen to `Alarm.events` and filter on `AlarmEventCause.snooze` instead: same deferrals, plus the `recordedAt` that `Alarm.acknowledgeEvent()` needs. No removal version.
 
 ## 5.11.0
 * **[Android] An alarm whose time passed while the device was off is now discarded instead of ringing at boot (#418).** Reported on `Alarm.events` as an `AlarmDropped` with cause `staleAtBoot`.
