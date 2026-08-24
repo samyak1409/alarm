@@ -98,6 +98,9 @@ void main() {
       host.pending.add(droppedEvent(42, scheduledFor));
 
       final snoozes = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, so what it
+      // must NOT report is still worth asserting.
+      // ignore: deprecated_member_use_from_same_package
       final subscription = Alarm.snoozed.listen(snoozes.add);
       addTearDown(subscription.cancel);
 
@@ -233,6 +236,9 @@ void main() {
       final seen = <AlarmEvent>[];
       final snoozes = <({int id, DateTime nextRingAt})>[];
       final events = Alarm.events.listen(seen.add);
+      // Deprecated in favour of Alarm.events, but still shipped, so what it
+      // must NOT report is still worth asserting.
+      // ignore: deprecated_member_use_from_same_package
       final snoozed = Alarm.snoozed.listen(snoozes.add);
       addTearDown(events.cancel);
       addTearDown(snoozed.cancel);

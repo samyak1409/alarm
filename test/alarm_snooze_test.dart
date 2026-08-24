@@ -121,6 +121,9 @@ void main() {
       await Alarm.init();
 
       final seen = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, and this
+      // group is the coverage that keeps it behaving as documented.
+      // ignore: deprecated_member_use_from_same_package
       final subscription = Alarm.snoozed.listen(seen.add);
       addTearDown(subscription.cancel);
       await pump();
@@ -200,6 +203,87 @@ void main() {
     });
   });
 
+  group('the documented replacement for Alarm.snoozed', () {
+    // README and the example app now tell applications to filter Alarm.events
+    // themselves rather than use the deprecated view. If the two ever stopped
+    // agreeing, that advice would silently start losing deferrals, so pin the
+    // equivalence rather than trusting the getter's one-line body.
+    test('sees every deferral the deprecated stream sees, plus recordedAt',
+        () async {
+      final nextRingAt = DateTime.now().add(const Duration(minutes: 9));
+      // Deliberately not nextRingAt: a marker drained on a later init was
+      // recorded when the user pressed Snooze, and the whole point of the
+      // field is that it answers a different question from "when does it ring".
+      final recordedAt = DateTime.now().subtract(const Duration(minutes: 3));
+      await AlarmStorage.saveAlarm(
+        buildAlarm(23, DateTime.now().add(const Duration(minutes: 1))),
+      );
+      await Alarm.init();
+
+      final viaEvents = <AlarmMoved>[];
+      final subEvents = Alarm.events
+          .where(
+            (event) =>
+                event is AlarmMoved && event.cause == AlarmEventCause.snooze,
+          )
+          .cast<AlarmMoved>()
+          .listen(viaEvents.add);
+      final viaSnoozed = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, and this
+      // group is the coverage that keeps it behaving as documented.
+      // ignore: deprecated_member_use_from_same_package
+      final subSnoozed = Alarm.snoozed.listen(viaSnoozed.add);
+      addTearDown(subEvents.cancel);
+      addTearDown(subSnoozed.cancel);
+
+      await hostReportsEvent(
+        snoozeEvent(23, nextRingAt, recordedAt: recordedAt),
+      );
+      await pump();
+
+      expect(viaSnoozed, hasLength(1));
+      expect(
+        viaEvents.map((event) => (id: event.id, nextRingAt: event.nextRingAt)),
+        viaSnoozed,
+        reason: 'the filter the docs prescribe must yield the same deferrals',
+      );
+      expect(
+        viaEvents.single.recordedAt.millisecondsSinceEpoch,
+        recordedAt.millisecondsSinceEpoch,
+        reason: 'the field Alarm.snoozed drops, and the reason to move; '
+            'acknowledgeEvent is keyed on it',
+      );
+    });
+
+    test('a deferral the platform forced reaches only the replacement',
+        () async {
+      // The deprecated stream deliberately means "the user snoozed". Anyone
+      // migrating to the raw filter keeps that distinction only because the
+      // cause is part of it.
+      final nextRingAt = DateTime.now().add(const Duration(seconds: 30));
+      await AlarmStorage.saveAlarm(
+        buildAlarm(24, DateTime.now().subtract(const Duration(seconds: 5))),
+      );
+      await Alarm.init();
+
+      final viaEvents = <AlarmEvent>[];
+      final subEvents = Alarm.events.listen(viaEvents.add);
+      final viaSnoozed = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, and this
+      // group is the coverage that keeps it behaving as documented.
+      // ignore: deprecated_member_use_from_same_package
+      final subSnoozed = Alarm.snoozed.listen(viaSnoozed.add);
+      addTearDown(subEvents.cancel);
+      addTearDown(subSnoozed.cancel);
+
+      await hostReportsEvent(refusedRingEvent(24, nextRingAt));
+      await pump();
+
+      expect(viaSnoozed, isEmpty, reason: 'the user did not snooze this');
+      expect(viaEvents.single.cause, AlarmEventCause.platformRefusal);
+    });
+  });
+
   group('live snooze report', () {
     test('moves the alarm forward and emits on Alarm.snoozed', () async {
       final nextRingAt = DateTime.now().add(const Duration(minutes: 9));
@@ -209,6 +293,9 @@ void main() {
       await Alarm.init();
 
       final events = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, and this
+      // group is the coverage that keeps it behaving as documented.
+      // ignore: deprecated_member_use_from_same_package
       final sub = Alarm.snoozed.listen(events.add);
       addTearDown(sub.cancel);
 
@@ -232,6 +319,9 @@ void main() {
       await Alarm.init();
 
       final events = <({int id, DateTime nextRingAt})>[];
+      // Deprecated in favour of Alarm.events, but still shipped, and this
+      // group is the coverage that keeps it behaving as documented.
+      // ignore: deprecated_member_use_from_same_package
       final sub = Alarm.snoozed.listen(events.add);
       addTearDown(sub.cancel);
 
