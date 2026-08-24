@@ -145,6 +145,22 @@ the app is already running, either send a live event on the same channel — Dar
 is known to be ready by then — or hold the value until Dart consumes it on the
 next resume. A getter that only runs once at startup is not enough on its own.
 
+## Don't let startup navigation replace the alarm screen
+
+Consuming the launch and navigating to your alarm screen is not the end of it.
+An alarm cold start runs the same `main()` as a launcher tap, so whatever your
+app normally does on startup — a splash screen, an auth gate, an onboarding
+check — still runs, and its navigation can land after yours and replace the
+alarm screen. The alarm keeps ringing with nothing on screen to say so, which
+looks exactly like an alarm that never fired.
+
+So make the launch an input to the first routing decision, rather than a
+navigation performed on top of one already made: consume the pending alarm id
+before the splash decides where to go, and let its result choose the initial
+route. `Alarm.ringing` is a useful cross-check — while it is non-empty, the
+alarm screen is what the user needs to see, whatever your normal startup would
+have picked.
+
 ## Task and back-stack behavior
 
 Using `MainActivity` keeps alarm launches in your app's normal task. Calling
